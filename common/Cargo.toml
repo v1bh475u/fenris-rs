@@ -6,3 +6,9 @@ edition = "2024"
 [dependencies]
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+
+aes-gcm = "0.10"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
