@@ -14,3 +14,7 @@ sha2 = "0.10"
 rand = "0.8"
 
 flate2 = "1.0"
+
+tokio = { workspace = true }
+
+tracing = { workspace = true }
