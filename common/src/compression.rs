@@ -106,7 +106,7 @@ impl CompressionManager {
 impl Default for CompressionManager {
     fn default() -> Self {
         Self {
-            compressor: Box::new(ZlibCompressor::default()),
+            compressor: Box::new(NullCompressor::default()),
         }
     }
 }
@@ -155,9 +155,9 @@ mod tests {
     #[test]
     fn test_algorithm_name() {
         let zlib_manager = CompressionManager::default();
-        assert_eq!(zlib_manager.compressor_name(), "zlib");
+        assert_eq!(zlib_manager.compressor_name(), "none");
 
-        let null_manager = CompressionManager::new(Box::new(NullCompressor));
-        assert_eq!(null_manager.compressor_name(), "none");
+        let null_manager = CompressionManager::new(Box::new(ZlibCompressor::new()));
+        assert_eq!(null_manager.compressor_name(), "zlib");
     }
 }
