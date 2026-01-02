@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package fenris;
+
+enum RequestType {
+  PING = 0;
+  CREATE_FILE = 1;
+  READ_FILE = 2;
+  WRITE_FILE = 3;
+  APPEND_FILE = 4;
+  DELETE_FILE = 5;
+  INFO_FILE = 6;
+  CREATE_DIR = 7;
+  LIST_DIR = 8;
+  CHANGE_DIR =9;
+  DELETE_DIR = 10;
+  TERMINATE = 11;
+}
+
+message Request {
+  RequestType command = 1;
+  string filename = 2;
+  uint32 ip_addr = 3;
+  bytes data = 4;
+}
+
+enum ResponseType {
+  PONG = 0;
+  FILE_INFO = 1;
+  FILE_CONTENT = 2;
+  DIR_LISTING = 3;
+  SUCCESS = 4;
+  ERROR = 5;
+  TERMINATED = 6;
+}
+
+message Response {
+  ResponseType type = 1;
+  bool success = 2;
+  string error_message = 3;
+  bytes data = 4;
+
+  // Type-specific fields
+  oneof details {
+    FileInfo file_info = 5;
+    DirectoryListing directory_listing = 6;
+  }
+}
+
+message FileInfo {
+  string name = 1;
+  uint64 size = 2;
+  bool is_directory = 3;
+  uint64 modified_time = 4;
+  // Optional: file permissions
+  uint32 permissions = 5;
+}
+
+message DirectoryListing {
+  repeated FileInfo entries = 1;
+}
