@@ -21,7 +21,7 @@ pub enum FenrisError {
     DecompressionError(String),
 
     #[error("Network error: {0}")]
-    Network(#[from] std::io::Error),
+    NetworkError(#[from] std::io::Error),
 
     #[error("Connection closed")]
     ConnectionClosed,
@@ -72,7 +72,7 @@ mod tests {
         let fenris_err: FenrisError = io_err.into();
 
         match fenris_err {
-            FenrisError::Network(_) => {}
+            FenrisError::NetworkError(_) => {}
             _ => panic!("Wrong error variant"),
         }
     }
