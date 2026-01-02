@@ -103,7 +103,7 @@ impl Encryptor for AesGcmEncryptor {
 
         cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|e| FenrisError::DecompressionError(e.to_string()))
+            .map_err(|e| FenrisError::DecryptionError(e.to_string()))
     }
 
     fn generate_iv(&self) -> Vec<u8> {
@@ -246,6 +246,30 @@ impl CryptoManager {
         self.key_deriver
             .derive_key(shared_secret, context, output_size)
     }
+    // seals packet as `iv || ciphertext`
+    pub fn seal(&self, plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>> {
+        let iv = self.generate_iv();
+        let mut ciphertext = self.encrypt(plaintext, key, &iv)?;
+
+        let mut sealed = iv;
+        sealed.append(&mut ciphertext);
+
+        Ok(sealed)
+    }
+
+    // opens packet formatted as `iv || ciphertext`
+    pub fn open(&self, sealed: &[u8], key: &[u8]) -> Result<Vec<u8>> {
+        if sealed.len() < self.encryptor.iv_size() {
+            return Err(FenrisError::DecryptionError(
+                "Sealed data is too short to contain IV".to_string(),
+            ));
+        }
+
+        let iv_size = self.encryptor.iv_size();
+        let (iv, ciphertext) = sealed.split_at(iv_size);
+
+        self.decrypt(ciphertext, key, iv)
+    }
 }
 
 impl Default for CryptoManager {
@@ -367,5 +391,15 @@ mod tests {
 
         let decrypted = manager.decrypt(&ciphertext, &key, &iv).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_seal_open() {
+        let manager = CryptoManager::default();
+        let plaintext = b"Sealed message";
+        let key = [1u8; KEY_SIZE];
+        let sealed = manager.seal(plaintext, &key).unwrap();
+        let opened = manager.open(&sealed, &key).unwrap();
+        assert_eq!(opened, plaintext);
     }
 }
