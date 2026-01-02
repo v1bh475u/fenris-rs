@@ -18,3 +18,9 @@ flate2 = "1.0"
 tokio = { workspace = true }
 
 tracing = { workspace = true }
+
+prost = { workspace = true }
+bytes = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.12"
