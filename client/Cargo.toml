@@ -3,7 +3,25 @@ name = "client"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[[bin]]
+name = "client"
+path = "src/main.rs"
 
-[lib]
-path = "src/client.rs"
+[dependencies]
+common = { path = "../common" }
+
+
+ratatui = "0.26"
+crossterm = "0.27"
+
+clap = { version = "4.4", features = ["derive"] }
+
+tokio = { workspace = true }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+anyhow = { workspace = true }
+
+prost = { workspace = true }
+bytes = { workspace = true }
