@@ -29,6 +29,9 @@ pub enum FenrisError {
     #[error("Invalid protocol message")]
     InvalidProtocolMessage,
 
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+
     #[error("File operation failed: {0}")]
     FileOperationError(String),
 
