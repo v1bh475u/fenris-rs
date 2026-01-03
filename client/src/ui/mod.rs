@@ -7,7 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use std::time::Duration;
 
-use crate::app::{App, Screen};
+use crate::app::{App, ConnectionFocus, Screen};
 
 pub fn render(frame: &mut Frame, app: &App) {
     match app.screen {
@@ -32,14 +32,27 @@ pub fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
 
 fn handle_connection_input(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
-        KeyCode::Enter => {
-            // Will be handled in main loop to actually connect
-        }
-        KeyCode::Char(c) => {
-            app.server_addr.push(c);
-        }
-        KeyCode::Backspace => {
-            app.server_addr.pop();
+        KeyCode::Char(c) => match app.connection_focus {
+            ConnectionFocus::Address => app.server_addr.push(c),
+            ConnectionFocus::Port => {
+                if c.is_ascii_digit() && app.server_port.len() < 5 {
+                    app.server_port.push(c);
+                }
+            }
+        },
+        KeyCode::Backspace => match app.connection_focus {
+            ConnectionFocus::Address => {
+                app.server_addr.pop();
+            }
+            ConnectionFocus::Port => {
+                app.server_port.pop();
+            }
+        },
+        KeyCode::Tab => {
+            app.connection_focus = match app.connection_focus {
+                ConnectionFocus::Address => crate::app::ConnectionFocus::Port,
+                ConnectionFocus::Port => crate::app::ConnectionFocus::Address,
+            };
         }
         _ => {}
     }
@@ -50,9 +63,6 @@ fn handle_command_input(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::F(1) => {
             app.screen = Screen::Help;
-        }
-        KeyCode::Enter => {
-            // Command will be processed in main loop
         }
         KeyCode::Up => {
             app.history_previous();

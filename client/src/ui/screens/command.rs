@@ -1,8 +1,8 @@
 use crate::app::App;
 use crate::ui::components;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
     Frame,
+    layout::{Constraint, Direction, Layout},
 };
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -28,6 +28,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         &app.command_input,
         app.cursor_position,
     );
+
+    let cursor_x = chunks[2].x + prompt.len() as u16 + app.cursor_position as u16;
+    let cursor_y = chunks[2].y + 1;
+
+    frame.set_cursor(cursor_x, cursor_y);
 
     components::render_help_text(
         frame,

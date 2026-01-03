@@ -1,11 +1,11 @@
-use crate::app::App;
+use crate::app::{App, ConnectionFocus};
 use crate::ui::components;
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -28,6 +28,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         &[
             ("Tab", "Switch field"),
             ("Enter", "Connect"),
+            ("F1", "Help"),
             ("Ctrl+C", "Quit"),
         ],
     );
@@ -35,7 +36,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 fn render_connection_form(frame: &mut Frame, area: Rect, app: &App) {
     let form_width = 60;
-    let form_height = 12;
+    let form_height = 15;
 
     let centered = center_rect(area, form_width, form_height);
 
@@ -65,26 +66,63 @@ fn render_connection_form(frame: &mut Frame, area: Rect, app: &App) {
         .style(Style::default().fg(Color::Yellow));
     frame.render_widget(title, chunks[0]);
 
-    let address_block = Block::default()
-        .title(" Server Address ")
-        .borders(Borders::ALL)
-        .style(Style::default());
+    let address_focused = matches!(app.connection_focus, ConnectionFocus::Address);
+    let address_style = if address_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
 
-    let address_input = Paragraph::new(app.server_addr.as_str()).block(address_block);
+    let address_title = " Server Address ";
+
+    let address_block = Block::default()
+        .title(address_title)
+        .borders(Borders::ALL)
+        .border_style(if address_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+
+    let address_input = Paragraph::new(app.server_addr.as_str())
+        .style(address_style)
+        .block(address_block);
 
     frame.render_widget(address_input, chunks[2]);
 
-    let port_block = Block::default()
-        .title(" Port ")
-        .borders(Borders::ALL)
-        .style(Style::default());
+    let port_focused = matches!(app.connection_focus, ConnectionFocus::Port);
+    let port_style = if port_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
 
-    let port_input = Paragraph::new(app.server_port.as_str()).block(port_block);
+    let port_title = " Port ";
+
+    let port_block = Block::default()
+        .title(port_title)
+        .borders(Borders::ALL)
+        .border_style(if port_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+
+    let port_input = Paragraph::new(app.server_port.as_str())
+        .style(port_style)
+        .block(port_block);
 
     frame.render_widget(port_input, chunks[3]);
 
     let instructions = vec![Line::from(vec![
-        Span::raw("Press "),
+        Span::raw("Use "),
+        Span::styled(
+            "Tab",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" to switch fields, "),
         Span::styled(
             "Enter",
             Style::default()

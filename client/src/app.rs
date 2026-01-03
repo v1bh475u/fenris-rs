@@ -7,12 +7,19 @@ pub enum Screen {
     Help,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionFocus {
+    Address,
+    Port,
+}
+
 pub struct App {
     pub screen: Screen,
     pub should_quit: bool,
 
     pub server_addr: String,
     pub server_port: String,
+    pub connection_focus: ConnectionFocus,
     pub connected: bool,
     pub current_dir: String,
 
@@ -47,6 +54,7 @@ impl App {
             should_quit: false,
             server_addr: String::from("127.0.0.1"),
             server_port: String::from("8080"),
+            connection_focus: ConnectionFocus::Address,
             connected: false,
             current_dir: String::from("/"),
             command_input: String::new(),
