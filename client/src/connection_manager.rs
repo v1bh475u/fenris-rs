@@ -1,6 +1,8 @@
 use common::{
-    CompressionManager, FenrisError, Result, SecureChannel,
-    crypto::CryptoManager,
+    DefaultCompression, DefaultCrypto, FenrisError, Result, SecureChannel,
+    compression::Compressor,
+    crypto::{Encryptor, KeyDeriver, KeyExchanger},
+    default_compression, default_crypto,
     proto::{Request, Response},
 };
 
@@ -12,13 +14,33 @@ use tracing::{debug, info};
 use crate::response_manager::ResponseManager;
 use crate::{request_manager::RequestManager, response_manager::FormattedResponse};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionState {
-    Disconnected,
-    Connecting,
-    KeyExchange,
-    Connected,
-    Error(String),
+type ConfiguredChannel = SecureChannel<
+    <DefaultCrypto as CryptoManagerType>::E,
+    <DefaultCrypto as CryptoManagerType>::K,
+    <DefaultCrypto as CryptoManagerType>::D,
+    <DefaultCompression as CompressionManagerType>::C,
+>;
+
+trait CryptoManagerType {
+    type E: Encryptor;
+    type K: KeyExchanger;
+    type D: KeyDeriver;
+}
+
+impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver> CryptoManagerType
+    for common::CryptoManager<E, K, D>
+{
+    type E = E;
+    type K = K;
+    type D = D;
+}
+
+trait CompressionManagerType {
+    type C: Compressor;
+}
+
+impl<C: Compressor> CompressionManagerType for common::CompressionManager<C> {
+    type C = C;
 }
 
 #[derive(Debug, Clone)]
@@ -37,61 +59,47 @@ impl ServerInfo {
     }
 }
 pub struct ConnectionManager {
-    server_info: ServerInfo,
-    state: ConnectionState,
-    channel: Option<SecureChannel>,
+    server_info: Option<ServerInfo>,
+    channel: Option<ConfiguredChannel>,
     request_manager: RequestManager,
     response_manager: ResponseManager,
 }
 
 impl ConnectionManager {
-    pub fn new(
-        server_info: ServerInfo,
-        request_manager: RequestManager,
-        response_manager: ResponseManager,
-    ) -> Self {
+    pub fn new(request_manager: RequestManager, response_manager: ResponseManager) -> Self {
         Self {
-            server_info,
-            state: ConnectionState::Disconnected,
+            server_info: None,
             channel: None,
             request_manager,
             response_manager,
         }
     }
 
-    pub fn state(&self) -> &ConnectionState {
-        &self.state
-    }
-
     pub fn is_connected(&self) -> bool {
-        matches!(self.state, ConnectionState::Connected)
+        self.channel.is_some()
     }
 
     pub async fn connect(&mut self) -> Result<()> {
-        self.connect_with(CryptoManager::default(), CompressionManager::default())
-            .await
-    }
-
-    pub async fn connect_with(
-        &mut self,
-        crypto: CryptoManager,
-        compressor: CompressionManager,
-    ) -> Result<()> {
-        self.state = ConnectionState::Connecting;
-        let addr = self.server_info.to_socket_addr();
+        let addr = self
+            .server_info
+            .as_ref()
+            .ok_or(FenrisError::NetworkError(io::Error::new(
+                ErrorKind::Other,
+                "Server info not set",
+            )))?
+            .to_socket_addr();
         info!("Connecting to server at {}", addr);
 
-        let mut stream = TcpStream::connect(addr).await.map_err(|e| {
-            self.state = ConnectionState::Error(format!("Connection failed: {}", e));
-            FenrisError::NetworkError(e)
-        })?;
+        let stream = TcpStream::connect(addr)
+            .await
+            .map_err(|e| FenrisError::NetworkError(e))?;
 
-        self.state = ConnectionState::KeyExchange;
+        let crypto = default_crypto();
+        let compressor = default_compression();
 
         let channel = SecureChannel::client_handshake(stream, crypto, compressor).await?;
         self.channel = Some(channel);
 
-        self.state = ConnectionState::Connected;
         info!("Successfully connected to server");
 
         Ok(())
@@ -99,7 +107,6 @@ impl ConnectionManager {
 
     pub async fn disconnect(&mut self) {
         self.channel.take();
-        self.state = ConnectionState::Disconnected;
         info!("Disconnected from server");
     }
 
@@ -124,8 +131,13 @@ impl ConnectionManager {
         channel.recv_msg::<Response>().await
     }
 
-    pub fn server_info(&self) -> &ServerInfo {
-        &self.server_info
+    pub fn server_info(&self) -> Result<&ServerInfo> {
+        self.server_info
+            .as_ref()
+            .ok_or(FenrisError::NetworkError(io::Error::new(
+                ErrorKind::Other,
+                "Server info not set",
+            )))
     }
 
     pub fn set_server_info(&mut self, server_info: ServerInfo) -> Result<()> {
@@ -137,8 +149,14 @@ impl ConnectionManager {
             )));
         }
 
-        self.server_info = server_info;
+        self.server_info = Some(server_info);
         Ok(())
+    }
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new(RequestManager::default(), ResponseManager::default())
     }
 }
 
@@ -147,8 +165,6 @@ mod tests {
     use crate::{request_manager, response_manager};
 
     use super::*;
-    use crate::request_manager::DefaultRequestManager;
-    use crate::response_manager::DefaultResponseFormatter;
 
     #[test]
     fn test_connection_manager_creation() {
@@ -158,13 +174,12 @@ mod tests {
         let response_manager =
             ResponseManager::new(Box::new(response_manager::DefaultResponseFormatter {}));
 
-        let manager =
-            ConnectionManager::new(server_info.clone(), request_manager, response_manager);
+        let mut manager = ConnectionManager::new(request_manager, response_manager);
+        manager.set_server_info(server_info.clone()).unwrap();
 
-        assert_eq!(manager.state(), &ConnectionState::Disconnected);
         assert!(!manager.is_connected());
-        assert_eq!(manager.server_info().address, "127.0.0.1");
-        assert_eq!(manager.server_info().port, 8080);
+        assert_eq!(manager.server_info().unwrap().address, "127.0.0.1");
+        assert_eq!(manager.server_info().unwrap().port, 8080);
     }
 
     #[test]
@@ -175,13 +190,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_command_when_disconnected() {
-        let server_info = ServerInfo::new("127.0.0.1".to_string(), 5555);
-
-        let mut manager = ConnectionManager::new(
-            server_info,
-            RequestManager::default(),
-            ResponseManager::default(),
-        );
+        let mut manager =
+            ConnectionManager::new(RequestManager::default(), ResponseManager::default());
 
         let result = manager.send_command("ping").await;
 
