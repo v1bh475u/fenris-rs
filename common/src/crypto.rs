@@ -197,18 +197,14 @@ impl KeyDeriver for HkdfSha256Deriver {
     }
 }
 
-pub struct CryptoManager {
-    encryptor: Box<dyn Encryptor>,
-    key_exchanger: Box<dyn KeyExchanger>,
-    key_deriver: Box<dyn KeyDeriver>,
+pub struct CryptoManager<E: Encryptor, K: KeyExchanger, D: KeyDeriver> {
+    encryptor: E,
+    key_exchanger: K,
+    key_deriver: D,
 }
 
-impl CryptoManager {
-    pub fn new(
-        encryptor: Box<dyn Encryptor>,
-        key_exchanger: Box<dyn KeyExchanger>,
-        key_deriver: Box<dyn KeyDeriver>,
-    ) -> Self {
+impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver> CryptoManager<E, K, D> {
+    pub fn new(encryptor: E, key_exchanger: K, key_deriver: D) -> Self {
         Self {
             encryptor,
             key_exchanger,
@@ -272,23 +268,17 @@ impl CryptoManager {
     }
 }
 
-impl Default for CryptoManager {
-    fn default() -> Self {
-        Self {
-            encryptor: Box::new(AesGcmEncryptor),
-            key_exchanger: Box::new(X25519KeyExchanger),
-            key_deriver: Box::new(HkdfSha256Deriver::default()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_default_crypto_manager() {
-        let manager = CryptoManager::default();
+        let manager = CryptoManager::new(
+            AesGcmEncryptor,
+            X25519KeyExchanger,
+            HkdfSha256Deriver::default(),
+        );
 
         let plaintext = b"Hello, Fenris!";
         let key = [42u8; KEY_SIZE];
@@ -302,7 +292,11 @@ mod tests {
 
     #[test]
     fn test_key_exchange() {
-        let manager = CryptoManager::default();
+        let manager = CryptoManager::new(
+            AesGcmEncryptor,
+            X25519KeyExchanger,
+            HkdfSha256Deriver::default(),
+        );
 
         let (alice_priv, alice_pub) = manager.generate_keypair();
         let (bob_priv, bob_pub) = manager.generate_keypair();
@@ -319,7 +313,11 @@ mod tests {
 
     #[test]
     fn test_full_workflow() {
-        let manager = CryptoManager::default();
+        let manager = CryptoManager::new(
+            AesGcmEncryptor,
+            X25519KeyExchanger,
+            HkdfSha256Deriver::default(),
+        );
 
         let (alice_priv, alice_pub) = manager.generate_keypair();
         let (bob_priv, bob_pub) = manager.generate_keypair();
@@ -375,9 +373,9 @@ mod tests {
     #[test]
     fn test_custom_encryptor() {
         let manager = CryptoManager::new(
-            Box::new(DummyEncryptor),
-            Box::new(X25519KeyExchanger),
-            Box::new(HkdfSha256Deriver::default()),
+            DummyEncryptor,
+            X25519KeyExchanger,
+            HkdfSha256Deriver::default(),
         );
 
         let plaintext = b"Hello";
@@ -395,7 +393,11 @@ mod tests {
 
     #[test]
     fn test_seal_open() {
-        let manager = CryptoManager::default();
+        let manager = CryptoManager::new(
+            AesGcmEncryptor,
+            X25519KeyExchanger,
+            HkdfSha256Deriver::default(),
+        );
         let plaintext = b"Sealed message";
         let key = [1u8; KEY_SIZE];
         let sealed = manager.seal(plaintext, &key).unwrap();

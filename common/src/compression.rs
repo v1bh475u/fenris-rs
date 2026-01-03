@@ -81,12 +81,12 @@ impl Compressor for NullCompressor {
     }
 }
 
-pub struct CompressionManager {
-    compressor: Box<dyn Compressor>,
+pub struct CompressionManager<C: Compressor> {
+    compressor: C,
 }
 
-impl CompressionManager {
-    pub fn new(compressor: Box<dyn Compressor>) -> Self {
+impl<C: Compressor> CompressionManager<C> {
+    pub fn new(compressor: C) -> Self {
         Self { compressor }
     }
 
@@ -103,21 +103,13 @@ impl CompressionManager {
     }
 }
 
-impl Default for CompressionManager {
-    fn default() -> Self {
-        Self {
-            compressor: Box::new(NullCompressor::default()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_zlib_compress_decompress() {
-        let manager = CompressionManager::default();
+        let manager = CompressionManager::new(NullCompressor);
 
         let original = b"Hello, World!  This is test data.";
         let compressed = manager.compress(original).unwrap();
@@ -128,9 +120,7 @@ mod tests {
 
     #[test]
     fn test_compression_level() {
-        let manager = CompressionManager::new(
-            Box::new(ZlibCompressor::with_level(9)), // Maximum compression
-        );
+        let manager = CompressionManager::new(ZlibCompressor::with_level(9));
 
         let data = b"AAAAAAAAAA".repeat(1000);
         let compressed = manager.compress(&data).unwrap();
@@ -140,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_null_compressor() {
-        let manager = CompressionManager::new(Box::new(NullCompressor));
+        let manager = CompressionManager::new(NullCompressor);
 
         let data = b"Test data";
         let compressed = manager.compress(data).unwrap();
@@ -154,10 +144,10 @@ mod tests {
 
     #[test]
     fn test_algorithm_name() {
-        let zlib_manager = CompressionManager::default();
+        let zlib_manager = CompressionManager::new(NullCompressor);
         assert_eq!(zlib_manager.compressor_name(), "none");
 
-        let null_manager = CompressionManager::new(Box::new(ZlibCompressor::new()));
+        let null_manager = CompressionManager::new(ZlibCompressor::new());
         assert_eq!(null_manager.compressor_name(), "zlib");
     }
 }

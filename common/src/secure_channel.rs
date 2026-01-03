@@ -1,21 +1,28 @@
-use crate::{CompressionManager, FenrisError, Result, crypto::CryptoManager, network};
+use crate::{
+    CompressionManager, FenrisError, Result,
+    compression::Compressor,
+    crypto::{CryptoManager, Encryptor, KeyDeriver, KeyExchanger},
+    network,
+};
 use prost::Message;
 use tokio::net::TcpStream;
 use tracing::debug;
 
-pub struct SecureChannel {
+pub const DEFAULT_KDF_CONTEXT: &[u8] = b"fenris-aes-key";
+
+pub struct SecureChannel<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> {
     stream: TcpStream,
     key: Vec<u8>,
-    crypto: CryptoManager,
-    compressor: CompressionManager,
+    crypto: CryptoManager<E, K, D>,
+    compressor: CompressionManager<C>,
 }
 
-impl SecureChannel {
+impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> SecureChannel<E, K, D, C> {
     pub fn new(
         stream: TcpStream,
         key: Vec<u8>,
-        crypto: CryptoManager,
-        compressor: CompressionManager,
+        crypto: CryptoManager<E, K, D>,
+        compressor: CompressionManager<C>,
     ) -> Self {
         Self {
             stream,
@@ -26,9 +33,18 @@ impl SecureChannel {
     }
 
     pub async fn client_handshake(
+        stream: TcpStream,
+        crypto: CryptoManager<E, K, D>,
+        compressor: CompressionManager<C>,
+    ) -> Result<Self> {
+        Self::client_handshake_with_context(stream, crypto, compressor, DEFAULT_KDF_CONTEXT).await
+    }
+
+    pub async fn client_handshake_with_context(
         mut stream: TcpStream,
-        crypto: CryptoManager,
-        compressor: CompressionManager,
+        crypto: CryptoManager<E, K, D>,
+        compressor: CompressionManager<C>,
+        context: &[u8],
     ) -> Result<Self> {
         debug!("Starting client handshake");
 
@@ -37,15 +53,24 @@ impl SecureChannel {
 
         let server_public_key = network::receive_prefixed(&mut stream).await?;
         let shared_secret = crypto.compute_shared_secret(&private_key, &server_public_key)?;
-        let key = crypto.derive_key(&shared_secret, b"fenris-aes-key")?;
+        let key = crypto.derive_key(&shared_secret, context)?;
 
         Ok(Self::new(stream, key, crypto, compressor))
     }
 
     pub async fn server_handshake(
+        stream: TcpStream,
+        crypto: CryptoManager<E, K, D>,
+        compressor: CompressionManager<C>,
+    ) -> Result<Self> {
+        Self::server_handshake_with_context(stream, crypto, compressor, DEFAULT_KDF_CONTEXT).await
+    }
+
+    pub async fn server_handshake_with_context(
         mut stream: TcpStream,
-        crypto: CryptoManager,
-        compressor: CompressionManager,
+        crypto: CryptoManager<E, K, D>,
+        compressor: CompressionManager<C>,
+        context: &[u8],
     ) -> Result<Self> {
         debug!("Starting server key exchange");
 
@@ -55,10 +80,11 @@ impl SecureChannel {
         network::send_prefixed(&mut stream, &public_key).await?;
 
         let shared_secret = crypto.compute_shared_secret(&private_key, &client_public_key)?;
-        let key = crypto.derive_key(&shared_secret, b"fenris-aes-key")?;
+        let key = crypto.derive_key(&shared_secret, context)?;
 
         Ok(Self::new(stream, key, crypto, compressor))
     }
+
     pub async fn send_msg<M: Message>(&mut self, msg: &M) -> Result<()> {
         let mut buf = Vec::new();
         msg.encode(&mut buf)
