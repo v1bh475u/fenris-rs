@@ -12,6 +12,7 @@ use client::Client;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::fs::File::create("fenris-client.log")?)
+        .with_ansi(false)
         .init();
 
     let mut terminal = ui::terminal::init()?;
