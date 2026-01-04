@@ -6,15 +6,21 @@ on:
   pull_request:
     branches: [ master ]
 
-jobs: 
+jobs:
   coverage:
-    name:  Generate Coverage Report
+    name: Generate Coverage Report
     runs-on:  ubuntu-latest
     steps: 
       - uses: actions/checkout@v4
       
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+      
       - name: Install Rust
-        uses:  dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable
       
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin
@@ -28,7 +34,7 @@ jobs:
             --out Xml \
             --output-dir ./coverage
       
-      - name:  Upload to Codecov
+      - name: Upload to Codecov
         uses: codecov/codecov-action@v3
         with:
           files: ./coverage/cobertura.xml

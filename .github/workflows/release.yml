@@ -9,9 +9,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs: 
-  # ============================================================================
-  # Create GitHub Release
-  # ============================================================================
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -23,17 +20,14 @@ jobs:
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets. GITHUB_TOKEN }}
-        with: 
+        env: 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
           draft: false
           prerelease: false
 
-  # ============================================================================
-  # Build Binaries for Multiple Platforms
-  # ============================================================================
   build: 
     name: Build (${{ matrix.os }})
     needs: create-release
@@ -44,40 +38,66 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: fenris-linux-amd64
+            protoc_install: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: fenris-macos-amd64
+            protoc_install: brew install protobuf
+          
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: fenris-macos-arm64
+            protoc_install: brew install protobuf
+          
           - os: windows-latest
-            target:  x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-msvc
             artifact_name: fenris-windows-amd64.exe
+            protoc_install:  choco install protoc
     
     steps:
-      - uses:  actions/checkout@v4
+      - uses: actions/checkout@v4
+      
+      - name: Install protobuf compiler
+        run: ${{ matrix.protoc_install }}
+      
+      - name:  Verify protoc installation
+        run: protoc --version
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+        with: 
+          targets: ${{ matrix. target }}
       
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix. target }}
+        run: cargo build --release --target ${{ matrix.target }}
       
       - name: Strip binary (Linux/macOS)
         if: matrix.os != 'windows-latest'
-        run:  strip target/${{ matrix.target }}/release/server
+        run: |
+          strip target/${{ matrix.target }}/release/server || true
+          strip target/${{ matrix.target }}/release/client || true
       
-      - name: Create archive
+      - name: Create archive (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           mkdir release
-          cp target/${{ matrix. target }}/release/server release/ || cp target/${{ matrix.target }}/release/server.exe release/
-          cp target/${{ matrix.target }}/release/client release/ || cp target/${{ matrix.target }}/release/client.exe release/
+          cp target/${{ matrix.target }}/release/server release/
+          cp target/${{ matrix.target }}/release/client release/
           cd release
           tar czf .. /${{ matrix.artifact_name }}.tar.gz *
       
-      - name: Upload Release Asset
+      - name: Create archive (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir release
+          cp target/${{ matrix.target }}/release/server.exe release/
+          cp target/${{ matrix.target }}/release/client.exe release/
+          cd release
+          7z a ../${{ matrix.artifact_name }}.zip *
+      
+      - name: Upload Release Asset (Unix)
+        if: matrix.os != 'windows-latest'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
@@ -86,16 +106,30 @@ jobs:
           asset_path: . /${{ matrix.artifact_name }}.tar.gz
           asset_name: ${{ matrix.artifact_name }}.tar.gz
           asset_content_type: application/gzip
-  
-  # ============================================================================
-  # Publish to crates.io
-  # ============================================================================
-  publish:
+      
+      - name: Upload Release Asset (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env: 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.artifact_name }}.zip
+          asset_name: ${{ matrix.artifact_name }}.zip
+          asset_content_type:  application/zip
+
+  publish: 
     name: Publish to crates.io
     needs: build
     runs-on:  ubuntu-latest
-    steps:
+    steps: 
       - uses: actions/checkout@v4
+      
+      - name: Install protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,13 +139,13 @@ jobs:
           cd common
           cargo publish --token ${{ secrets.CARGO_TOKEN }}
       
-      - name:  Wait for common to be available
+      - name: Wait for common to be available
         run: sleep 30
       
-      - name: Publish server
-        run:  |
+      - name:  Publish server
+        run: |
           cd server
-          cargo publish --token ${{ secrets. CARGO_TOKEN }}
+          cargo publish --token ${{ secrets.CARGO_TOKEN }}
       
       - name:  Publish client
         run: |
