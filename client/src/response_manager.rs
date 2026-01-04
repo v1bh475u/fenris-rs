@@ -39,27 +39,32 @@ impl DefaultResponseFormatter {
     }
 
     fn format_success(&self, response: &Response) -> FormattedResponse {
-        let (msg, current_dir) = if response.data.is_empty() {
-            ("Operation successful".to_string(), None)
+        let msg = if response.data.is_empty() {
+            "Operation successful".to_string()
         } else {
-            let data_str = String::from_utf8_lossy(&response.data).to_string();
-
-            if data_str.starts_with('/')
-                || data_str.starts_with('~')
-                || data_str == "."
-                || data_str == ".."
-            {
-                (format!("Changed directory to {}", data_str), Some(data_str))
-            } else {
-                (data_str, None)
-            }
+            String::from_utf8_lossy(&response.data).to_string()
         };
 
         FormattedResponse {
             success: true,
             message: msg,
             details: None,
-            current_dir,
+            current_dir: None,
+        }
+    }
+
+    fn format_change_dir(&self, response: &Response) -> FormattedResponse {
+        let dir = if response.data.is_empty() {
+            "/".to_string()
+        } else {
+            String::from_utf8_lossy(&response.data).to_string()
+        };
+
+        FormattedResponse {
+            success: true,
+            message: format!("Changed directory to {}", dir),
+            details: None,
+            current_dir: Some(dir),
         }
     }
 
@@ -209,6 +214,7 @@ impl ResponseFormatter for DefaultResponseFormatter {
         match response_type {
             ResponseType::Pong => self.format_pong(response),
             ResponseType::Success => self.format_success(response),
+            ResponseType::ChangedDir => self.format_change_dir(response),
             ResponseType::FileContent => self.format_file_content(response),
             ResponseType::FileInfo => self.format_file_info(response),
             ResponseType::DirListing => self.format_dir_listing(response),

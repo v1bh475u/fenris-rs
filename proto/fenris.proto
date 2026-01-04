@@ -32,6 +32,7 @@ enum ResponseType {
   SUCCESS = 4;
   ERROR = 5;
   TERMINATED = 6;
+  CHANGED_DIR = 7;
 }
 
 message Response {

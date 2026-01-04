@@ -268,7 +268,15 @@ async fn serve_connection(
                     break;
                 }
 
-                let response = handler.process_request(client_id, &request).await;
+                let mut current_dir = state.clients.get(&client_id)
+                    .map(|info| info.current_dir.clone())
+                    .unwrap_or_else(|| std::path::PathBuf::from("/"));
+
+                let response = handler.process_request(client_id, &request, &mut current_dir).await;
+
+                if let Some(mut info) = state.clients.get_mut(&client_id) {
+                    info.current_dir = current_dir;
+                }
 
                 if let Err(e) = channel.send_msg(&response).await {
                     debug!("Client {} send failed: {}", client_id, e);

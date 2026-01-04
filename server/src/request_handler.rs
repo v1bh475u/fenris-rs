@@ -2,7 +2,7 @@ use common::{
     FenrisError, FileOperations, Request, RequestType, Response, ResponseType, Result,
     proto::response,
 };
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error};
 
@@ -17,10 +17,25 @@ impl RequestHandler {
         Self { file_ops }
     }
 
-    pub async fn process_request(&self, client_id: ClientId, request: &Request) -> Response {
+    fn resolve_path(&self, path: &str, current_dir: &PathBuf) -> PathBuf {
+        if path.is_empty() || path == "." {
+            current_dir.clone()
+        } else if path.starts_with('/') {
+            PathBuf::from(path)
+        } else {
+            current_dir.join(path)
+        }
+    }
+
+    pub async fn process_request(
+        &self,
+        client_id: ClientId,
+        request: &Request,
+        current_dir: &mut PathBuf,
+    ) -> Response {
         debug!(
-            "Processing request from client {}:  command={}",
-            client_id, request.command
+            "Processing request from client {} in dir {:?}:  command={}",
+            client_id, current_dir, request.command
         );
 
         let request_type = match RequestType::try_from(request.command) {
@@ -30,7 +45,10 @@ impl RequestHandler {
             }
         };
 
-        match self.handle_request(request_type, request).await {
+        match self
+            .handle_request(request_type, request, current_dir)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 error!("Request failed: {}", e);
@@ -43,25 +61,32 @@ impl RequestHandler {
         &self,
         request_type: RequestType,
         request: &Request,
+        current_dir: &mut PathBuf,
     ) -> Result<Response> {
         match request_type {
             RequestType::Ping => self.handle_ping().await,
-            RequestType::CreateFile => self.handle_create_file(&request.filename).await,
-            RequestType::ReadFile => self.handle_read_file(&request.filename).await,
+            RequestType::CreateFile => {
+                self.handle_create_file(&request.filename, current_dir)
+                    .await
+            }
+            RequestType::ReadFile => self.handle_read_file(&request.filename, current_dir).await,
             RequestType::WriteFile => {
-                self.handle_write_file(&request.filename, &request.data)
+                self.handle_write_file(&request.filename, &request.data, current_dir)
                     .await
             }
-            RequestType::DeleteFile => self.handle_delete_file(&request.filename).await,
+            RequestType::DeleteFile => {
+                self.handle_delete_file(&request.filename, current_dir)
+                    .await
+            }
             RequestType::AppendFile => {
-                self.handle_append_file(&request.filename, &request.data)
+                self.handle_append_file(&request.filename, &request.data, current_dir)
                     .await
             }
-            RequestType::InfoFile => self.handle_file_info(&request.filename).await,
-            RequestType::CreateDir => self.handle_create_dir(&request.filename).await,
-            RequestType::ListDir => self.handle_list_dir(&request.filename).await,
-            RequestType::DeleteDir => self.handle_delete_dir(&request.filename).await,
-            RequestType::ChangeDir => self.handle_change_dir(&request.filename).await,
+            RequestType::InfoFile => self.handle_file_info(&request.filename, current_dir).await,
+            RequestType::CreateDir => self.handle_create_dir(&request.filename, current_dir).await,
+            RequestType::ListDir => self.handle_list_dir(&request.filename, current_dir).await,
+            RequestType::DeleteDir => self.handle_delete_dir(&request.filename, current_dir).await,
+            RequestType::ChangeDir => self.handle_change_dir(&request.filename, current_dir).await,
             RequestType::Terminate => Err(FenrisError::InvalidRequest(
                 "Terminate request should be handled separately".to_string(),
             )),
@@ -78,22 +103,22 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_create_file(&self, filename: &str) -> Result<Response> {
-        let path = Path::new(filename);
-        self.file_ops.create_file(path).await?;
+    async fn handle_create_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        self.file_ops.create_file(&path).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
             success: true,
             error_message: String::new(),
-            data: format!("File created: {}", filename).into_bytes(),
+            data: format!("File created: {}", path.to_string_lossy()).into_bytes(),
             details: None,
         })
     }
 
-    async fn handle_read_file(&self, filename: &str) -> Result<Response> {
-        let path = Path::new(filename);
-        let data = self.file_ops.read_file(path).await?;
+    async fn handle_read_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        let data = self.file_ops.read_file(&path).await?;
 
         Ok(Response {
             r#type: ResponseType::FileContent as i32,
@@ -104,9 +129,14 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_write_file(&self, filename: &str, data: &[u8]) -> Result<Response> {
-        let path = Path::new(filename);
-        self.file_ops.write_file(path, data).await?;
+    async fn handle_write_file(
+        &self,
+        filename: &str,
+        data: &[u8],
+        current_dir: &PathBuf,
+    ) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        self.file_ops.write_file(&path, data).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
@@ -117,35 +147,45 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_delete_file(&self, filename: &str) -> Result<Response> {
-        let path = Path::new(filename);
-        self.file_ops.delete_file(path).await?;
+    async fn handle_delete_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        self.file_ops.delete_file(&path).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
             success: true,
             error_message: String::new(),
-            data: format!("File deleted: {}", filename).into_bytes(),
+            data: format!("File deleted: {}", path.to_string_lossy()).into_bytes(),
             details: None,
         })
     }
 
-    async fn handle_append_file(&self, filename: &str, data: &[u8]) -> Result<Response> {
-        let path = Path::new(filename);
-        self.file_ops.append_file(path, data).await?;
+    async fn handle_append_file(
+        &self,
+        filename: &str,
+        data: &[u8],
+        current_dir: &PathBuf,
+    ) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        self.file_ops.append_file(&path, data).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
             success: true,
             error_message: String::new(),
-            data: format!("Appended {} bytes to {}", data.len(), filename).into_bytes(),
+            data: format!(
+                "Appended {} bytes to {}",
+                data.len(),
+                path.to_string_lossy()
+            )
+            .into_bytes(),
             details: None,
         })
     }
 
-    async fn handle_file_info(&self, filename: &str) -> Result<Response> {
-        let path = Path::new(filename);
-        let metadata = self.file_ops.file_info(path).await?;
+    async fn handle_file_info(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(filename, current_dir);
+        let metadata = self.file_ops.file_info(&path).await?;
 
         let file_info = common::proto::FileInfo {
             name: metadata.name,
@@ -164,27 +204,23 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_create_dir(&self, dirname: &str) -> Result<Response> {
-        let path = Path::new(dirname);
-        self.file_ops.create_dir(path).await?;
+    async fn handle_create_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(dirname, current_dir);
+        self.file_ops.create_dir(&path).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
             success: true,
             error_message: String::new(),
-            data: format!("Directory created: {}", dirname).into_bytes(),
+            data: format!("Directory created: {}", path.to_string_lossy()).into_bytes(),
             details: None,
         })
     }
 
-    async fn handle_list_dir(&self, dirname: &str) -> Result<Response> {
-        let path = if dirname.is_empty() || dirname == "." {
-            Path::new("/")
-        } else {
-            Path::new(dirname)
-        };
+    async fn handle_list_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(dirname, current_dir);
 
-        let entries = self.file_ops.list_dir(path).await?;
+        let entries = self.file_ops.list_dir(&path).await?;
 
         let file_entries: Vec<common::proto::FileInfo> = entries
             .into_iter()
@@ -210,33 +246,53 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_delete_dir(&self, dirname: &str) -> Result<Response> {
-        let path = Path::new(dirname);
-        self.file_ops.delete_dir(path).await?;
+    async fn handle_delete_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+        let path = self.resolve_path(dirname, current_dir);
+        self.file_ops.delete_dir(&path).await?;
 
         Ok(Response {
             r#type: ResponseType::Success as i32,
             success: true,
             error_message: String::new(),
-            data: format!("Directory deleted: {}", dirname).into_bytes(),
+            data: format!("Directory deleted: {}", path.to_string_lossy()).into_bytes(),
             details: None,
         })
     }
 
-    async fn handle_change_dir(&self, dirname: &str) -> Result<Response> {
-        let path = Path::new(dirname);
+    async fn handle_change_dir(
+        &self,
+        dirname: &str,
+        current_dir: &mut PathBuf,
+    ) -> Result<Response> {
+        let target_path = if dirname.is_empty() || dirname == "~" {
+            PathBuf::from("/")
+        } else if dirname == "." {
+            current_dir.clone()
+        } else if dirname == ".." {
+            current_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("/"))
+        } else if dirname.starts_with('/') {
+            PathBuf::from(dirname)
+        } else {
+            current_dir.join(dirname)
+        };
 
-        if !self.file_ops.is_dir(path).await {
+        if !self.file_ops.is_dir(&target_path).await {
             return Err(FenrisError::FileOperationError(
                 "Not a directory".to_string(),
             ));
         }
 
+        *current_dir = target_path.clone();
+
+        let dir_str = target_path.to_string_lossy().to_string();
         Ok(Response {
-            r#type: ResponseType::Success as i32,
+            r#type: ResponseType::ChangedDir as i32,
             success: true,
             error_message: String::new(),
-            data: dirname.as_bytes().to_vec(),
+            data: dir_str.as_bytes().to_vec(),
             details: None,
         })
     }
