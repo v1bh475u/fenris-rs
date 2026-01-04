@@ -1,8 +1,5 @@
 use common::{
-    DefaultCompression, DefaultCrypto, FenrisError, Result, SecureChannel,
-    compression::Compressor,
-    crypto::{Encryptor, KeyDeriver, KeyExchanger},
-    default_compression, default_crypto,
+    DefaultSecureChannel, FenrisError, Result, SecureChannel, default_compression, default_crypto,
     proto::{Request, Response},
 };
 
@@ -13,35 +10,6 @@ use tracing::{debug, info};
 
 use crate::response_manager::ResponseManager;
 use crate::{request_manager::RequestManager, response_manager::FormattedResponse};
-
-type ConfiguredChannel = SecureChannel<
-    <DefaultCrypto as CryptoManagerType>::E,
-    <DefaultCrypto as CryptoManagerType>::K,
-    <DefaultCrypto as CryptoManagerType>::D,
-    <DefaultCompression as CompressionManagerType>::C,
->;
-
-trait CryptoManagerType {
-    type E: Encryptor;
-    type K: KeyExchanger;
-    type D: KeyDeriver;
-}
-
-impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver> CryptoManagerType
-    for common::CryptoManager<E, K, D>
-{
-    type E = E;
-    type K = K;
-    type D = D;
-}
-
-trait CompressionManagerType {
-    type C: Compressor;
-}
-
-impl<C: Compressor> CompressionManagerType for common::CompressionManager<C> {
-    type C = C;
-}
 
 #[derive(Debug, Clone)]
 pub struct ServerInfo {
@@ -60,7 +28,7 @@ impl ServerInfo {
 }
 pub struct ConnectionManager {
     server_info: Option<ServerInfo>,
-    channel: Option<ConfiguredChannel>,
+    channel: Option<DefaultSecureChannel>,
     request_manager: RequestManager,
     response_manager: ResponseManager,
 }

@@ -1,6 +1,7 @@
 use crate::{
     CompressionManager, FenrisError, Result,
     compression::Compressor,
+    config::{DefaultCompressor, DefaultEncryptor, DefaultKeyDeriver, DefaultKeyExchanger},
     crypto::{CryptoManager, Encryptor, KeyDeriver, KeyExchanger},
     network,
 };
@@ -9,6 +10,9 @@ use tokio::net::TcpStream;
 use tracing::debug;
 
 pub const DEFAULT_KDF_CONTEXT: &[u8] = b"fenris-aes-key";
+
+pub type DefaultSecureChannel =
+    SecureChannel<DefaultEncryptor, DefaultKeyExchanger, DefaultKeyDeriver, DefaultCompressor>;
 
 pub struct SecureChannel<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> {
     stream: TcpStream,
