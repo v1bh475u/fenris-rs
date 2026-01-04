@@ -129,6 +129,11 @@ impl Client {
             return Ok(());
         }
 
+        if command.trim() == "help" {
+            self.app.screen = Screen::Help;
+            return Ok(());
+        }
+
         match self.connection_manager.send_command(&command).await {
             Ok(formatted) => {
                 if formatted.success {
