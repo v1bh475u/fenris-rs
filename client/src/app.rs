@@ -53,7 +53,7 @@ impl App {
             screen: Screen::Connection,
             should_quit: false,
             server_addr: String::from("127.0.0.1"),
-            server_port: String::from("8080"),
+            server_port: String::from("5555"),
             connection_focus: ConnectionFocus::Address,
             connected: false,
             current_dir: String::from("/"),
