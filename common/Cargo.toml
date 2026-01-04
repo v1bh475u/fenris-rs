@@ -15,12 +15,15 @@ rand = "0.8"
 
 flate2 = "1.0"
 
+async-trait = "0.1"
+
 tokio = { workspace = true }
 
 tracing = { workspace = true }
 
 prost = { workspace = true }
 bytes = { workspace = true }
+tempfile = "3.8"
 
 [build-dependencies]
 prost-build = "0.12"
