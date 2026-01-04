@@ -5,6 +5,7 @@ pub struct FormattedResponse {
     pub success: bool,
     pub message: String,
     pub details: Option<String>,
+    pub current_dir: Option<String>,
 }
 
 pub trait ResponseFormatter: Send + Sync {
@@ -32,20 +33,32 @@ impl DefaultResponseFormatter {
             success: true,
             message: "PONG - Server is alive! ".to_string(),
             details: None,
+            current_dir: None,
         }
     }
 
     fn format_success(&self, response: &Response) -> FormattedResponse {
-        let msg = if response.data.is_empty() {
-            "Operation successful".to_string()
+        let (msg, current_dir) = if response.data.is_empty() {
+            ("Operation successful".to_string(), None)
         } else {
-            String::from_utf8_lossy(&response.data).to_string()
+            let data_str = String::from_utf8_lossy(&response.data).to_string();
+
+            if data_str.starts_with('/')
+                || data_str.starts_with('~')
+                || data_str == "."
+                || data_str == ".."
+            {
+                (format!("Changed directory to {}", data_str), Some(data_str))
+            } else {
+                (data_str, None)
+            }
         };
 
         FormattedResponse {
             success: true,
             message: msg,
             details: None,
+            current_dir,
         }
     }
 
@@ -61,6 +74,7 @@ impl DefaultResponseFormatter {
             success: true,
             message: format!("File content ({} bytes):", response.data.len()),
             details: Some(preview),
+            current_dir: None,
         }
     }
 
@@ -75,6 +89,7 @@ impl DefaultResponseFormatter {
             success: true,
             message: "File info received".to_string(),
             details: None,
+            current_dir: None,
         }
     }
 
@@ -103,6 +118,7 @@ impl DefaultResponseFormatter {
             success: true,
             message: "File information: ".to_string(),
             details: Some(details),
+            current_dir: None,
         }
     }
 
@@ -117,6 +133,7 @@ impl DefaultResponseFormatter {
             success: true,
             message: "Empty directory".to_string(),
             details: None,
+            current_dir: None,
         }
     }
 
@@ -126,6 +143,7 @@ impl DefaultResponseFormatter {
                 success: true,
                 message: "Directory is empty".to_string(),
                 details: None,
+                current_dir: None,
             };
         }
 
@@ -158,6 +176,7 @@ impl DefaultResponseFormatter {
             success: true,
             message: "Directory listing:".to_string(),
             details: Some(output),
+            current_dir: None,
         }
     }
 
@@ -166,6 +185,7 @@ impl DefaultResponseFormatter {
             success: false,
             message: response.error_message.clone(),
             details: None,
+            current_dir: None,
         }
     }
 }
@@ -179,6 +199,7 @@ impl ResponseFormatter for DefaultResponseFormatter {
                 success: false,
                 message: response.error_message.clone(),
                 details: None,
+                current_dir: None,
             };
         }
 
@@ -195,6 +216,7 @@ impl ResponseFormatter for DefaultResponseFormatter {
                 success: true,
                 message: "Server terminated".to_string(),
                 details: None,
+                current_dir: None,
             },
         }
     }
@@ -211,10 +233,6 @@ impl ResponseManager {
 
     pub fn format_response(&self, response: &Response) -> FormattedResponse {
         self.formatter.format_response(response)
-    }
-
-    pub fn extract_current_dir(&self, response: &Response) -> Option<String> {
-        self.formatter.extract_current_dir(response)
     }
 }
 
