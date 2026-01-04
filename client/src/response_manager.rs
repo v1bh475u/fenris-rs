@@ -1,3 +1,4 @@
+use chrono;
 use common::proto::{DirectoryListing, FileInfo, Response, ResponseType, response};
 use tracing::debug;
 
@@ -293,8 +294,8 @@ fn format_timestamp(timestamp: u64) -> String {
     use std::time::{Duration, UNIX_EPOCH};
 
     let datetime = UNIX_EPOCH + Duration::from_secs(timestamp);
-
-    format!("{:?}", datetime)
+    let datetime: chrono::DateTime<chrono::Local> = datetime.into();
+    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 #[cfg(test)]

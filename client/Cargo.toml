@@ -25,3 +25,5 @@ anyhow = { workspace = true }
 
 prost = { workspace = true }
 bytes = { workspace = true }
+
+chrono = "0.4"
