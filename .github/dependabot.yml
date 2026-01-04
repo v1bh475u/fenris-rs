@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory:  "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit:  10
+    labels: 
+      - "dependencies"
+      - "rust"
+    groups:
+      tokio:
+        patterns:
+          - "tokio*"
+      security:
+        patterns:
+          - "aes-gcm"
+          - "x25519-dalek"
+          - "sha2"
+          - "hkdf"
+  
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
