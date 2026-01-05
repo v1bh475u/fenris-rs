@@ -190,6 +190,10 @@ impl FileOperations for DefaultFileOperations {
             .await
             .map_err(|e| FenrisError::FileOperationError(format!("Failed to write file: {}", e)))?;
 
+        file.sync_all()
+            .await
+            .map_err(|e| FenrisError::FileOperationError(format!("Failed to sync file: {}", e)))?;
+
         debug!("Wrote {} bytes to {:?}", data.len(), full_path);
 
         Ok(())
