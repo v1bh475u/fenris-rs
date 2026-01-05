@@ -89,6 +89,7 @@ pub struct DefaultFileOperations {
 
 impl DefaultFileOperations {
     pub fn new(base_dir: PathBuf) -> Self {
+        let base_dir = base_dir.canonicalize().unwrap_or(base_dir);
         Self { base_dir }
     }
 
