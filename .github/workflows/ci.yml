@@ -130,7 +130,7 @@ jobs:
         run: cargo build --all-features
       
       - name: Run integration tests
-        run: cargo test --test '*' --all-features -- --test-threads=1
+        run: cargo test --all-features -- --test-threads=1
       
       - name: Start server and run e2e tests
         run: |
