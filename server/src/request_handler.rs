@@ -2,7 +2,7 @@ use common::{
     FenrisError, FileOperations, Request, RequestType, Response, ResponseType, Result,
     proto::response,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
 
@@ -17,9 +17,9 @@ impl RequestHandler {
         Self { file_ops }
     }
 
-    fn resolve_path(&self, path: &str, current_dir: &PathBuf) -> PathBuf {
+    fn resolve_path(&self, path: &str, current_dir: &Path) -> PathBuf {
         if path.is_empty() || path == "." {
-            current_dir.clone()
+            current_dir.to_path_buf()
         } else if path.starts_with('/') {
             PathBuf::from(path)
         } else {
@@ -103,7 +103,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_create_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_create_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         self.file_ops.create_file(&path).await?;
 
@@ -116,7 +116,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_read_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_read_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         let data = self.file_ops.read_file(&path).await?;
 
@@ -133,7 +133,7 @@ impl RequestHandler {
         &self,
         filename: &str,
         data: &[u8],
-        current_dir: &PathBuf,
+        current_dir: &Path,
     ) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         self.file_ops.write_file(&path, data).await?;
@@ -147,7 +147,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_delete_file(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_delete_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         self.file_ops.delete_file(&path).await?;
 
@@ -164,7 +164,7 @@ impl RequestHandler {
         &self,
         filename: &str,
         data: &[u8],
-        current_dir: &PathBuf,
+        current_dir: &Path,
     ) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         self.file_ops.append_file(&path, data).await?;
@@ -183,7 +183,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_file_info(&self, filename: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_file_info(&self, filename: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(filename, current_dir);
         let metadata = self.file_ops.file_info(&path).await?;
 
@@ -204,7 +204,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_create_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_create_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(dirname, current_dir);
         self.file_ops.create_dir(&path).await?;
 
@@ -217,7 +217,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_list_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_list_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(dirname, current_dir);
 
         let entries = self.file_ops.list_dir(&path).await?;
@@ -246,7 +246,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_delete_dir(&self, dirname: &str, current_dir: &PathBuf) -> Result<Response> {
+    async fn handle_delete_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
         let path = self.resolve_path(dirname, current_dir);
         self.file_ops.delete_dir(&path).await?;
 
