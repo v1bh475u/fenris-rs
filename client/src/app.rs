@@ -44,7 +44,6 @@ pub enum MessageKind {
     Info,
     Error,
     Success,
-    Warning,
 }
 
 impl App {
@@ -88,10 +87,6 @@ impl App {
 
     pub fn success(&mut self, content: impl Into<String>) {
         self.add_message(MessageKind::Success, content.into());
-    }
-
-    pub fn warning(&mut self, content: impl Into<String>) {
-        self.add_message(MessageKind::Warning, content.into());
     }
 
     pub fn add_to_history(&mut self, command: String) {

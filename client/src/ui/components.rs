@@ -52,7 +52,6 @@ pub fn render_messages(frame: &mut Frame, area: Rect, messages: &[Message]) {
                 MessageKind::Info => ("ℹ", Color::Blue),
                 MessageKind::Success => ("✓", Color::Green),
                 MessageKind::Error => ("✗", Color::Red),
-                MessageKind::Warning => ("⚠", Color::Yellow),
             };
 
             Line::from(vec![
