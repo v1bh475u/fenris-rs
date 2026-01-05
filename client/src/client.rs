@@ -28,12 +28,11 @@ impl Client {
         loop {
             terminal.draw(|frame| ui::render(frame, &self.app))?;
 
-            if let Some(event) = ui::poll_events(Duration::from_millis(100))? {
-                if let crossterm::event::Event::Key(key) = event {
-                    if key.kind == crossterm::event::KeyEventKind::Press {
-                        self.handle_key_event(key).await?;
-                    }
-                }
+            if let Some(crossterm::event::Event::Key(key)) =
+                ui::poll_events(Duration::from_millis(100))?
+                && key.kind == crossterm::event::KeyEventKind::Press
+            {
+                self.handle_key_event(key).await?;
             }
 
             self.app.tick();
