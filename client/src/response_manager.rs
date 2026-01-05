@@ -1,4 +1,3 @@
-use chrono;
 use common::proto::{DirectoryListing, FileInfo, Response, ResponseType, response};
 use tracing::debug;
 
@@ -11,24 +10,12 @@ pub struct FormattedResponse {
 
 pub trait ResponseFormatter: Send + Sync {
     fn format_response(&self, response: &Response) -> FormattedResponse;
-
-    fn extract_current_dir(&self, response: &Response) -> Option<String> {
-        if response.success && !response.data.is_empty() {
-            Some(String::from_utf8_lossy(&response.data).to_string())
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct DefaultResponseFormatter;
 
 impl DefaultResponseFormatter {
-    pub fn new() -> Self {
-        Self
-    }
-
     fn format_pong(&self, _response: &Response) -> FormattedResponse {
         FormattedResponse {
             success: true,
@@ -85,10 +72,8 @@ impl DefaultResponseFormatter {
     }
 
     fn format_file_info(&self, response: &Response) -> FormattedResponse {
-        if let Some(ref details) = response.details {
-            if let response::Details::FileInfo(file_info) = details {
-                return self.format_file_info_detail(file_info);
-            }
+        if let Some(response::Details::FileInfo(ref file_info)) = response.details {
+            return self.format_file_info_detail(file_info);
         }
 
         FormattedResponse {
@@ -129,10 +114,8 @@ impl DefaultResponseFormatter {
     }
 
     fn format_dir_listing(&self, response: &Response) -> FormattedResponse {
-        if let Some(ref details) = response.details {
-            if let response::Details::DirectoryListing(dir_listing) = details {
-                return self.format_dir_listing_detail(dir_listing);
-            }
+        if let Some(response::Details::DirectoryListing(ref dir_listing)) = response.details {
+            return self.format_dir_listing_detail(dir_listing);
         }
 
         FormattedResponse {
@@ -234,10 +217,6 @@ pub struct ResponseManager {
 }
 
 impl ResponseManager {
-    pub fn new(formatter: Box<dyn ResponseFormatter>) -> Self {
-        Self { formatter }
-    }
-
     pub fn format_response(&self, response: &Response) -> FormattedResponse {
         self.formatter.format_response(response)
     }
@@ -310,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_default_formatter() {
-        let formatter = DefaultResponseFormatter::new();
+        let formatter: DefaultResponseFormatter = Default::default();
 
         let response = Response {
             r#type: ResponseType::Success as i32,
