@@ -6,25 +6,12 @@ use tracing::{debug, warn};
 
 pub trait RequestBuilder: Send + Sync {
     fn build_request(&self, command: &str) -> Result<Request>;
-
-    fn validate_command(&self, command: &str) -> bool {
-        self.build_request(command).is_ok()
-    }
-
-    fn supported_commands(&self) -> Vec<&str> {
-        vec![
-            "ping", "ls", "cd", "read", "write", "create", "rm", "mkdir", "rmdir", "info", "append",
-        ]
-    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct DefaultRequestManager;
 
 impl DefaultRequestManager {
-    pub fn new() -> Self {
-        Self
-    }
     fn build_ping(&self) -> Result<Request> {
         debug!("Building PING request");
         Ok(Request {
@@ -208,7 +195,7 @@ impl DefaultRequestManager {
 
 impl RequestBuilder for DefaultRequestManager {
     fn build_request(&self, command: &str) -> Result<Request> {
-        let parts: Vec<&str> = command.trim().split_whitespace().collect();
+        let parts: Vec<&str> = command.split_whitespace().collect();
 
         if parts.is_empty() {
             return Err(FenrisError::InvalidProtocolMessage);
@@ -240,20 +227,8 @@ pub struct RequestManager {
     builder: Box<dyn RequestBuilder>,
 }
 impl RequestManager {
-    pub fn new(builder: Box<dyn RequestBuilder>) -> Self {
-        Self { builder }
-    }
-
     pub fn build_request(&self, command: &str) -> Result<Request> {
         self.builder.build_request(command)
-    }
-
-    pub fn validate_command(&self, command: &str) -> bool {
-        self.builder.validate_command(command)
-    }
-
-    pub fn supported_commands(&self) -> Vec<&str> {
-        self.builder.supported_commands()
     }
 }
 
@@ -271,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_build_ping() {
-        let manager = DefaultRequestManager::new();
+        let manager = DefaultRequestManager;
         let request = manager.build_request("ping").unwrap();
 
         assert_eq!(request.command, RequestType::Ping as i32);
