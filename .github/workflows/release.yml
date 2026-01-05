@@ -15,7 +15,7 @@ jobs:
     outputs: 
       upload_url: ${{ steps.create_release.outputs. upload_url }}
     steps: 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Create Release
         id: create_release
@@ -56,7 +56,7 @@ jobs:
             protoc_install:  choco install protoc
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Install protobuf compiler
         run: ${{ matrix.protoc_install }}
@@ -123,7 +123,7 @@ jobs:
     needs: build
     runs-on:  ubuntu-latest
     steps: 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Install protobuf compiler
         run: |
