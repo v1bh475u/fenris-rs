@@ -105,12 +105,11 @@ impl DefaultFileOperations {
         let full_path = self.base_dir.join(path);
 
         let canonical = full_path.canonicalize().or_else(|_| {
-            if let Some(parent) = full_path.parent() {
-                if let Ok(canonical_parent) = parent.canonicalize() {
-                    if let Some(filename) = full_path.file_name() {
-                        return Ok(canonical_parent.join(filename));
-                    }
-                }
+            if let Some(parent) = full_path.parent()
+                && let Ok(canonical_parent) = parent.canonicalize()
+                && let Some(filename) = full_path.file_name()
+            {
+                return Ok(canonical_parent.join(filename));
             }
             Err(FenrisError::FileOperationError("Invalid path".to_string()))
         })?;
@@ -306,19 +305,19 @@ impl FileOperations for DefaultFileOperations {
     }
 
     async fn is_dir(&self, path: &Path) -> bool {
-        if let Ok(full_path) = self.resolve_path(path) {
-            if let Ok(metadata) = fs::metadata(&full_path).await {
-                return metadata.is_dir();
-            }
+        if let Ok(full_path) = self.resolve_path(path)
+            && let Ok(metadata) = fs::metadata(&full_path).await
+        {
+            return metadata.is_dir();
         }
         false
     }
 
     async fn is_file(&self, path: &Path) -> bool {
-        if let Ok(full_path) = self.resolve_path(path) {
-            if let Ok(metadata) = fs::metadata(&full_path).await {
-                return metadata.is_file();
-            }
+        if let Ok(full_path) = self.resolve_path(path)
+            && let Ok(metadata) = fs::metadata(&full_path).await
+        {
+            return metadata.is_file();
         }
         false
     }
