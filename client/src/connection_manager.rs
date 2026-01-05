@@ -3,7 +3,7 @@ use common::{
     proto::{Request, Response},
 };
 
-use std::io::{self, ErrorKind};
+use std::io::{self};
 
 use tokio::net::TcpStream;
 use tracing::{debug, info};
@@ -51,8 +51,7 @@ impl ConnectionManager {
         let addr = self
             .server_info
             .as_ref()
-            .ok_or(FenrisError::NetworkError(io::Error::new(
-                ErrorKind::Other,
+            .ok_or(FenrisError::NetworkError(io::Error::other(
                 "Server info not set",
             )))?
             .to_socket_addr();
@@ -60,7 +59,7 @@ impl ConnectionManager {
 
         let stream = TcpStream::connect(addr)
             .await
-            .map_err(|e| FenrisError::NetworkError(e))?;
+            .map_err(FenrisError::NetworkError)?;
 
         let crypto = default_crypto();
         let compressor = default_compression();
@@ -99,20 +98,10 @@ impl ConnectionManager {
         channel.recv_msg::<Response>().await
     }
 
-    pub fn server_info(&self) -> Result<&ServerInfo> {
-        self.server_info
-            .as_ref()
-            .ok_or(FenrisError::NetworkError(io::Error::new(
-                ErrorKind::Other,
-                "Server info not set",
-            )))
-    }
-
     pub fn set_server_info(&mut self, server_info: ServerInfo) -> Result<()> {
         if self.is_connected() {
             tracing::error!("Cannot change server info while connected");
-            return Err(FenrisError::NetworkError(io::Error::new(
-                ErrorKind::Other,
+            return Err(FenrisError::NetworkError(io::Error::other(
                 "Cannot change server info while connected",
             )));
         }
@@ -130,24 +119,22 @@ impl Default for ConnectionManager {
 
 #[cfg(test)]
 mod tests {
-    use crate::{request_manager, response_manager};
 
     use super::*;
 
     #[test]
     fn test_connection_manager_creation() {
         let server_info = ServerInfo::new("127.0.0.1".to_string(), 8080);
-        let request_manager =
-            RequestManager::new(Box::new(request_manager::DefaultRequestManager {}));
-        let response_manager =
-            ResponseManager::new(Box::new(response_manager::DefaultResponseFormatter {}));
+        let request_manager = RequestManager::default();
+        let response_manager: ResponseManager = Default::default();
 
         let mut manager = ConnectionManager::new(request_manager, response_manager);
         manager.set_server_info(server_info.clone()).unwrap();
 
         assert!(!manager.is_connected());
-        assert_eq!(manager.server_info().unwrap().address, "127.0.0.1");
-        assert_eq!(manager.server_info().unwrap().port, 8080);
+        let info = manager.server_info.unwrap();
+        assert_eq!(info.address, "127.0.0.1");
+        assert_eq!(info.port, 8080);
     }
 
     #[test]
