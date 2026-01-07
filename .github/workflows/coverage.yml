@@ -2,30 +2,28 @@ name: Coverage
 
 on:
   push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
+    branches: [master]
 
 jobs:
   coverage:
     name: Generate Coverage Report
     if: github.actor != 'dependabot[bot]'
-    runs-on:  ubuntu-latest
-    steps: 
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@v6
-      
+
       - name: Install protobuf compiler
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin
-      
+
       - name: Generate coverage
         run: |
           cargo tarpaulin \
@@ -34,16 +32,16 @@ jobs:
             --timeout 300 \
             --out Xml \
             --output-dir ./coverage
-      
+
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/cobertura.xml
           fail_ci_if_error: true
-      
+
       - name: Archive coverage results
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path:  coverage/
+          path: coverage/
