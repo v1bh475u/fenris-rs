@@ -14,7 +14,8 @@ enum RequestType {
   LIST_DIR = 8;
   CHANGE_DIR =9;
   DELETE_DIR = 10;
-  TERMINATE = 11;
+  UPLOAD_FILE = 11;
+  TERMINATE = 12;
 }
 
 message Request {
