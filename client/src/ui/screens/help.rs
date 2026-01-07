@@ -59,6 +59,10 @@ fn render_help_content(frame: &mut Frame, area: Rect) {
         ("rm <file>", "Delete file"),
         ("mkdir <dir>", "Create directory"),
         ("rmdir <dir>", "Delete directory"),
+        (
+            "upload <client_file> <server_location>",
+            "Upload a file from local machine to server",
+        ),
         ("info <file>", "Get file information"),
         ("help", "Show this help"),
         ("exit", "Disconnect and quit"),

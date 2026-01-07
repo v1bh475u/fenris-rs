@@ -26,6 +26,9 @@ clap = { version = "4.4", features = ["derive"] }
 prost = { workspace = true }
 bytes = { workspace = true }
 
+[dev-dependencies]
+async-trait = "0.1"
+
 [lib]
 name = "server"
 path = "src/lib.rs"
