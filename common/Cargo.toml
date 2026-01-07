@@ -11,7 +11,7 @@ aes-gcm = "0.10"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 hkdf = "0.12"
 sha2 = "0.10"
-rand = "0.8"
+rand = "0.9"
 
 flate2 = "1.0"
 
