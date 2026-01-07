@@ -14,7 +14,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Length(3), // Input
             Constraint::Length(1), // Footer
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     components::render_header(frame, chunks[0], "FENRIS CLIENT", app.connected);
 
@@ -32,7 +32,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let cursor_x = chunks[2].x + prompt.len() as u16 + app.cursor_position as u16 + 1;
     let cursor_y = chunks[2].y + 1;
 
-    frame.set_cursor(cursor_x, cursor_y);
+    frame.set_cursor_position((cursor_x, cursor_y));
 
     components::render_help_text(
         frame,

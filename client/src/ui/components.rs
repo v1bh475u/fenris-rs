@@ -104,7 +104,7 @@ pub fn render_input(
     let cursor_y = area.y + 1;
 
     if cursor_x < area.x + area.width - 1 && cursor_y < area.y + area.height - 1 {
-        frame.set_cursor(cursor_x, cursor_y);
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 

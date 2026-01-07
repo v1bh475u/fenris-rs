@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             Constraint::Min(0),    // Content
             Constraint::Length(3), // Footer
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     components::render_header(frame, chunks[0], "FENRIS CLIENT", app.connected);
 
