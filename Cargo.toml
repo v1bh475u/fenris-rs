@@ -16,7 +16,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 
 
-prost = "0.12"
+prost = "0.14"
 bytes = "1.5"
 
 [profile.release]
