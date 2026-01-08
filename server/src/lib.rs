@@ -1,7 +1,8 @@
-pub mod client_info;
+mod config;
+mod connection;
 pub mod request_handler;
-pub mod server;
+mod server;
 
-pub use client_info::{ClientId, ClientInfo};
+pub use config::{ServerConfig, ServerConfigBuilder};
 pub use request_handler::RequestHandler;
-pub use server::{Server, ServerConfig, ServerHandle};
+pub use server::{Server, ServerHandle};

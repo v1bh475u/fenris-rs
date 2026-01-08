@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
 
-use crate::client_info::ClientId;
-
 pub struct RequestHandler {
     file_ops: Arc<dyn FileOperations>,
 }
@@ -29,7 +27,7 @@ impl RequestHandler {
 
     pub async fn process_request(
         &self,
-        client_id: ClientId,
+        client_id: u64,
         request: &Request,
         current_dir: &mut PathBuf,
     ) -> Response {

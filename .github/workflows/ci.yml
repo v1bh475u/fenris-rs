@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
-  pull_request: 
+  pull_request:
     branches: [master]
 
 env:
@@ -11,23 +11,23 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  quality: 
+  quality:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Install protobuf compiler
-        run:  |
+        run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
-      
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -36,13 +36,13 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo. lock') }}
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
-      
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-      
+
       - name: Check documentation
         run: cargo doc --no-deps --all-features
         env:
@@ -56,9 +56,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable, beta]
-    
+
     steps:
-      - uses:  actions/checkout@v6
+      - uses: actions/checkout@v6
 
       - name: Install protobuf compiler (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -66,24 +66,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
-      
+
       - name: Install protobuf compiler (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           brew install protobuf
           protoc --version
-      
+
       - name: Install protobuf compiler (Windows)
         if: matrix.os == 'windows-latest'
         run: |
           choco install protoc
           protoc --version
-      
+
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-      
+
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
@@ -92,13 +92,13 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      
+
       - name: Build
         run: cargo build --verbose --all-features
-      
+
       - name: Run tests
         run: cargo test --verbose --all-features
-      
+
       - name: Run doc tests
         run: cargo test --doc --all-features
 
@@ -107,16 +107,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Install protobuf compiler
-        run:  |
+        run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Cache dependencies
         uses: actions/cache@v3
         with:
@@ -125,40 +125,39 @@ jobs:
             ~/.cargo/git
             target
           key: integration-${{ hashFiles('**/Cargo.lock') }}
-      
+
       - name: Build all binaries
         run: cargo build --all-features
-      
+
       - name: Run integration tests
         run: cargo test --all-features -- --test-threads=1
-      
+
       - name: Start server and run e2e tests
         run: |
           # Create test directory
           mkdir -p test_files
-          
+
           # Start server in background
           cargo run --bin server -- \
-            --host 127.0.0.1 \
             --port 5555 \
             --base-dir ./test_files \
             --log-level debug &
           SERVER_PID=$!
-          
+
           echo "Server PID: $SERVER_PID"
-          
+
           # Wait for server to start
           sleep 3
-          
+
           # Check if server is running
           if !  kill -0 $SERVER_PID 2>/dev/null; then
             echo "Server failed to start"
             exit 1
           fi
-          
+
           # Run e2e tests (if you have them)
           # cargo test --test e2e -- --test-threads=1
-          
+
           # Cleanup
           kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
