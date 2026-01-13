@@ -1,5 +1,5 @@
 use common::{
-    DefaultSecureChannel, FenrisError, Result, SecureChannel, default_compression, default_crypto,
+    DefaultSecureChannel, FenrisError, Result,
     proto::{Request, Response},
 };
 
@@ -61,10 +61,7 @@ impl ConnectionManager {
             .await
             .map_err(FenrisError::NetworkError)?;
 
-        let crypto = default_crypto();
-        let compressor = default_compression();
-
-        let channel = SecureChannel::client_handshake(stream, crypto, compressor).await?;
+        let channel = DefaultSecureChannel::client_handshake(stream).await?;
         self.channel = Some(channel);
 
         info!("Successfully connected to server");

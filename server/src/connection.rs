@@ -1,6 +1,5 @@
 use common::{
     DefaultSecureChannel, FenrisError, Request, RequestType, Response, ResponseType, Result,
-    default_compression, default_crypto,
 };
 use std::io;
 use std::net::SocketAddr;
@@ -29,8 +28,7 @@ impl Connection {
         handler: Arc<RequestHandler>,
         config: Arc<ServerConfig>,
     ) -> Result<Self> {
-        let handshake =
-            DefaultSecureChannel::server_handshake(stream, default_crypto(), default_compression());
+        let handshake = DefaultSecureChannel::server_handshake(stream);
 
         let channel = tokio::time::timeout(config.handshake_timeout, handshake)
             .await
