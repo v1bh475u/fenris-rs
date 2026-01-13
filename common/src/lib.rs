@@ -7,10 +7,9 @@ pub mod network;
 pub mod proto;
 pub mod secure_channel;
 
-pub use compression::CompressionManager;
+pub use compression::{CompressionManager, ZlibCompressor};
 pub use config::{
-    DefaultCompression, DefaultCompressor, DefaultCrypto, DefaultEncryptor, DefaultKeyDeriver,
-    DefaultKeyExchanger, default_compression, default_crypto,
+    CompressionConfig, CompressionOf, Config, CryptoConfig, CryptoOf, SecureChannelConfig,
 };
 pub use crypto::{CryptoManager, IV_SIZE, KEY_SIZE, TAG_SIZE};
 pub use error::{FenrisError, Result};
