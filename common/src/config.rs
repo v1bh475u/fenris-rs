@@ -78,6 +78,16 @@ impl CompressionConfig for Zlib {
     }
 }
 
+pub struct ZlibWithLevel<const LEVEL: u32>;
+
+impl<const LEVEL: u32> CompressionConfig for ZlibWithLevel<LEVEL> {
+    type Compressor = ZlibCompressor;
+
+    fn compression() -> CompressionManager<Self::Compressor> {
+        CompressionManager::new(ZlibCompressor::with_level(LEVEL))
+    }
+}
+
 pub struct Config;
 
 impl SecureChannelConfig for Config {
