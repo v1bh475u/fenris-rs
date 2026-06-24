@@ -9,7 +9,8 @@ pub mod secure_channel;
 
 pub use compression::{CompressionManager, ZlibCompressor};
 pub use config::{
-    CompressionConfig, CompressionOf, Config, CryptoConfig, CryptoOf, SecureChannelConfig,
+    CompressionConfig, CompressionOf, Config, CryptoConfig, CryptoOf, DefaultSuite,
+    SecureChannelConfig, Zlib, ZlibWithLevel,
 };
 pub use crypto::{CryptoManager, IV_SIZE, KEY_SIZE, TAG_SIZE};
 pub use error::{FenrisError, Result};
