@@ -1,34 +1,30 @@
-use crate::error::Result;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::{
+    error::Result,
+    framing::{FrameLimits, LengthPrefixedFrame},
+};
 use tokio::net::TcpStream;
-use tracing::{debug, trace};
 
 pub async fn send_prefixed(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
-    let length = data.len() as u32;
-
-    trace!("Sending {} bytes", length);
-
-    let length_buf = length.to_be_bytes();
-
-    stream.write_all(&length_buf).await?;
-    stream.write_all(data).await?;
-    debug!("Sent {} bytes", length);
-
-    Ok(())
+    send_prefixed_with_limits(stream, data, FrameLimits::default()).await
 }
 
 pub async fn receive_prefixed(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut length_buf = [0u8; 4];
-    stream.read_exact(&mut length_buf).await?;
+    receive_prefixed_with_limits(stream, FrameLimits::default()).await
+}
 
-    let length = u32::from_be_bytes(length_buf) as usize;
-    trace!("Expecting to receive {} bytes", length);
+pub async fn send_prefixed_with_limits(
+    stream: &mut TcpStream,
+    data: &[u8],
+    limits: FrameLimits,
+) -> Result<()> {
+    LengthPrefixedFrame::send(stream, data, limits).await
+}
 
-    let mut data = vec![0u8; length];
-    stream.read_exact(&mut data).await?;
-    debug!("Received {} bytes", length);
-
-    Ok(data)
+pub async fn receive_prefixed_with_limits(
+    stream: &mut TcpStream,
+    limits: FrameLimits,
+) -> Result<Vec<u8>> {
+    LengthPrefixedFrame::receive(stream, limits).await
 }
 
 #[cfg(test)]
