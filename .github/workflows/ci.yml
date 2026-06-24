@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  PROTOC_VERSION: "35.1"
 
 jobs:
   quality:
@@ -35,7 +36,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo. lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -50,7 +51,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix. os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -75,9 +76,16 @@ jobs:
 
       - name: Install protobuf compiler (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          choco install protoc
-          protoc --version
+          $archive = Join-Path $env:RUNNER_TEMP "protoc.zip"
+          $installDir = Join-Path $env:RUNNER_TEMP "protoc"
+          $protocBin = Join-Path $installDir "bin"
+          $uri = "https://github.com/protocolbuffers/protobuf/releases/download/v${env:PROTOC_VERSION}/protoc-${env:PROTOC_VERSION}-win64.zip"
+          Invoke-WebRequest -Uri $uri -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $installDir -Force
+          $protocBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & (Join-Path $protocBin "protoc.exe") --version
 
       - name: Install Rust ${{ matrix.rust }}
         uses: dtolnay/rust-toolchain@master

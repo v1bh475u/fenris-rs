@@ -1,32 +1,25 @@
-use crate::{
-    CompressionManager, FenrisError, Result,
-    compression::Compressor,
-    config::{DefaultCompressor, DefaultEncryptor, DefaultKeyDeriver, DefaultKeyExchanger},
-    crypto::{CryptoManager, Encryptor, KeyDeriver, KeyExchanger},
-    network,
-};
+use crate::{CompressionOf, Config, CryptoOf, FenrisError, Result, SecureChannelConfig, network};
 use prost::Message;
 use tokio::net::TcpStream;
 use tracing::debug;
 
 pub const DEFAULT_KDF_CONTEXT: &[u8] = b"fenris-aes-key";
 
-pub type DefaultSecureChannel =
-    SecureChannel<DefaultEncryptor, DefaultKeyExchanger, DefaultKeyDeriver, DefaultCompressor>;
+pub type DefaultSecureChannel = SecureChannel<Config>;
 
-pub struct SecureChannel<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> {
+pub struct SecureChannel<Cfg: SecureChannelConfig> {
     stream: TcpStream,
     key: Vec<u8>,
-    crypto: CryptoManager<E, K, D>,
-    compressor: CompressionManager<C>,
+    crypto: CryptoOf<Cfg>,
+    compressor: CompressionOf<Cfg>,
 }
 
-impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> SecureChannel<E, K, D, C> {
+impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
     pub fn new(
         stream: TcpStream,
         key: Vec<u8>,
-        crypto: CryptoManager<E, K, D>,
-        compressor: CompressionManager<C>,
+        crypto: CryptoOf<Cfg>,
+        compressor: CompressionOf<Cfg>,
     ) -> Self {
         Self {
             stream,
@@ -36,21 +29,18 @@ impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> SecureChannel<
         }
     }
 
-    pub async fn client_handshake(
-        stream: TcpStream,
-        crypto: CryptoManager<E, K, D>,
-        compressor: CompressionManager<C>,
-    ) -> Result<Self> {
-        Self::client_handshake_with_context(stream, crypto, compressor, DEFAULT_KDF_CONTEXT).await
+    pub async fn client_handshake(stream: TcpStream) -> Result<Self> {
+        Self::client_handshake_with_context(stream, DEFAULT_KDF_CONTEXT).await
     }
 
     pub async fn client_handshake_with_context(
         mut stream: TcpStream,
-        crypto: CryptoManager<E, K, D>,
-        compressor: CompressionManager<C>,
         context: &[u8],
     ) -> Result<Self> {
         debug!("Starting client handshake");
+
+        let crypto = Cfg::crypto();
+        let compressor = Cfg::compression();
 
         let (private_key, public_key) = crypto.generate_keypair();
         network::send_prefixed(&mut stream, &public_key).await?;
@@ -62,23 +52,20 @@ impl<E: Encryptor, K: KeyExchanger, D: KeyDeriver, C: Compressor> SecureChannel<
         Ok(Self::new(stream, key, crypto, compressor))
     }
 
-    pub async fn server_handshake(
-        stream: TcpStream,
-        crypto: CryptoManager<E, K, D>,
-        compressor: CompressionManager<C>,
-    ) -> Result<Self> {
-        Self::server_handshake_with_context(stream, crypto, compressor, DEFAULT_KDF_CONTEXT).await
+    pub async fn server_handshake(stream: TcpStream) -> Result<Self> {
+        Self::server_handshake_with_context(stream, DEFAULT_KDF_CONTEXT).await
     }
 
     pub async fn server_handshake_with_context(
         mut stream: TcpStream,
-        crypto: CryptoManager<E, K, D>,
-        compressor: CompressionManager<C>,
         context: &[u8],
     ) -> Result<Self> {
         debug!("Starting server key exchange");
 
         let client_public_key = network::receive_prefixed(&mut stream).await?;
+
+        let crypto = Cfg::crypto();
+        let compressor = Cfg::compression();
 
         let (private_key, public_key) = crypto.generate_keypair();
         network::send_prefixed(&mut stream, &public_key).await?;
