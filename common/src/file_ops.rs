@@ -202,9 +202,10 @@ impl FileOperations for DefaultFileOperations {
     async fn append_file(&self, path: &Path, data: &[u8]) -> Result<()> {
         let full_path = self.resolve_path(path)?;
 
-        debug!("Appending {} bytes to {:? }", data.len(), full_path);
+        debug!("Appending {} bytes to {:?}", data.len(), full_path);
 
         let mut file = fs::OpenOptions::new()
+            .write(true)
             .append(true)
             .create(true)
             .open(&full_path)
@@ -216,6 +217,10 @@ impl FileOperations for DefaultFileOperations {
         file.write_all(data).await.map_err(|e| {
             FenrisError::FileOperationError(format!("Failed to append to file: {}", e))
         })?;
+
+        file.sync_all()
+            .await
+            .map_err(|e| FenrisError::FileOperationError(format!("Failed to sync file: {}", e)))?;
 
         debug!("Appended {} bytes to {:?}", data.len(), full_path);
 
@@ -367,6 +372,20 @@ mod tests {
         let path = Path::new("test.txt");
 
         file_ops.write_file(path, b"Hello").await.unwrap();
+        file_ops.append_file(path, b", World!").await.unwrap();
+
+        let data = file_ops.read_file(path).await.unwrap();
+        assert_eq!(data, b"Hello, World!");
+    }
+
+    #[tokio::test]
+    async fn test_append_file_creates_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_ops = DefaultFileOperations::new(temp_dir.path().to_path_buf());
+
+        let path = Path::new("new.txt");
+
+        file_ops.append_file(path, b"Hello").await.unwrap();
         file_ops.append_file(path, b", World!").await.unwrap();
 
         let data = file_ops.read_file(path).await.unwrap();
