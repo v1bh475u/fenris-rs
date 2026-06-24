@@ -23,6 +23,12 @@ pub enum FenrisError {
     #[error("Network error: {0}")]
     NetworkError(#[from] std::io::Error),
 
+    #[error("Frame too large: max {max} bytes, got {got} bytes")]
+    FrameTooLarge { max: usize, got: usize },
+
+    #[error("Invalid frame: {0}")]
+    InvalidFrame(String),
+
     #[error("Connection closed")]
     ConnectionClosed,
 
