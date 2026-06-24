@@ -30,6 +30,8 @@ pub async fn receive_prefixed_with_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FenrisError, FrameLimits};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::{TcpListener, TcpStream};
 
     async fn setup_connection() -> (TcpStream, TcpStream) {
@@ -72,5 +74,35 @@ mod tests {
         let received = receive_prefixed(&mut server).await.unwrap();
 
         assert_eq!(received, empty);
+    }
+
+    #[tokio::test]
+    async fn send_prefixed_with_limits_rejects_oversized_payload() {
+        let (mut client, _server) = setup_connection().await;
+        let limits = FrameLimits { max_frame_size: 4 };
+
+        let result = send_prefixed_with_limits(&mut client, b"12345", limits).await;
+
+        assert!(matches!(
+            result,
+            Err(FenrisError::FrameTooLarge { max: 4, got: 5 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn receive_prefixed_with_limits_rejects_oversized_payload() {
+        let (mut client, mut server) = setup_connection().await;
+        let limits = FrameLimits { max_frame_size: 4 };
+
+        tokio::spawn(async move {
+            client.write_all(&5u32.to_be_bytes()).await.unwrap();
+        });
+
+        let result = receive_prefixed_with_limits(&mut server, limits).await;
+
+        assert!(matches!(
+            result,
+            Err(FenrisError::FrameTooLarge { max: 4, got: 5 })
+        ));
     }
 }
