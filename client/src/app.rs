@@ -113,14 +113,12 @@ impl App {
 
     pub fn history_next(&mut self) {
         match self.history_index {
-            None => {}
-            Some(i) => {
-                if i < self.command_history.len() - 1 {
-                    self.history_index = Some(i + 1);
-                    self.command_input = self.command_history[i + 1].clone();
-                    self.cursor_position = self.command_input.len();
-                }
+            Some(i) if i < self.command_history.len() - 1 => {
+                self.history_index = Some(i + 1);
+                self.command_input = self.command_history[i + 1].clone();
+                self.cursor_position = self.command_input.len();
             }
+            _ => {}
         }
     }
 
