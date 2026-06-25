@@ -110,3 +110,86 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         self.stream
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DefaultSuite, FenrisError, KEY_SIZE, ProtocolConfig};
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct TestMessage {
+        value: u8,
+    }
+
+    struct TestCodec;
+
+    impl ProtocolCodec<TestMessage> for TestCodec {
+        fn encode(message: &TestMessage) -> Result<Vec<u8>> {
+            Ok(vec![message.value])
+        }
+
+        fn decode(data: &[u8]) -> Result<TestMessage> {
+            match data {
+                [value] => Ok(TestMessage { value: *value }),
+                _ => Err(FenrisError::SerializationError(
+                    "invalid test message".to_string(),
+                )),
+            }
+        }
+    }
+
+    struct TestProtocol;
+
+    impl ProtocolConfig for TestProtocol {
+        type Codec = TestCodec;
+    }
+
+    struct TestConfig;
+
+    impl SecureChannelConfig for TestConfig {
+        type CryptoConfig = DefaultSuite;
+        type CompressionConfig = DefaultSuite;
+        type ProtocolConfig = TestProtocol;
+    }
+
+    async fn setup_connection() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server, _) = listener.accept().await.unwrap();
+        let client = client.await.unwrap();
+
+        (client, server)
+    }
+
+    #[tokio::test]
+    async fn secure_channel_uses_configured_non_protobuf_codec() {
+        let (client_stream, server_stream) = setup_connection().await;
+        let key = vec![9u8; KEY_SIZE];
+
+        let mut client = SecureChannel::<TestConfig>::new(
+            client_stream,
+            key.clone(),
+            TestConfig::crypto(),
+            TestConfig::compression(),
+        );
+        let mut server = SecureChannel::<TestConfig>::new(
+            server_stream,
+            key,
+            TestConfig::crypto(),
+            TestConfig::compression(),
+        );
+
+        let send_task = tokio::spawn(async move {
+            client.send_msg(&TestMessage { value: 42 }).await
+        });
+
+        let received: TestMessage = server.recv_msg().await.unwrap();
+        send_task.await.unwrap().unwrap();
+
+        assert_eq!(received, TestMessage { value: 42 });
+    }
+}
