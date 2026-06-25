@@ -1,31 +1,24 @@
 include!(concat!(env!("OUT_DIR"), "/fenris.rs"));
 
-use crate::error::{FenrisError, Result};
-use prost::Message;
+use crate::{ProtobufCodec, ProtocolCodec, error::Result};
 
 impl Request {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.encode(&mut buf)
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))?;
-        Ok(buf)
+        ProtobufCodec::encode(self)
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        Self::decode(data).map_err(|e| FenrisError::SerializationError(e.to_string()))
+        ProtobufCodec::decode(data)
     }
 }
 
 impl Response {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.encode(&mut buf)
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))?;
-        Ok(buf)
+        ProtobufCodec::encode(self)
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        Self::decode(data).map_err(|e| FenrisError::SerializationError(e.to_string()))
+        ProtobufCodec::decode(data)
     }
 }
 

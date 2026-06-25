@@ -1,5 +1,5 @@
 use crate::{
-    CompressionManager, CryptoManager, ZlibCompressor,
+    CompressionManager, CryptoManager, ProtobufCodec, ZlibCompressor,
     compression::{Compressor, NullCompressor},
     crypto::{
         AesGcmEncryptor, Encryptor, HkdfSha256Deriver, KeyDeriver, KeyExchanger, X25519KeyExchanger,
@@ -19,6 +19,11 @@ pub trait CompressionConfig {
 
     fn compression() -> CompressionManager<Self::Compressor>;
 }
+
+pub trait ProtocolConfig {
+    type Codec;
+}
+
 pub type EncryptorOf<Cfg> =
     <<Cfg as SecureChannelConfig>::CryptoConfig as crate::config::CryptoConfig>::Encryptor;
 pub type KeyExchangerOf<Cfg> =
@@ -32,9 +37,14 @@ pub type CompressorOf<Cfg> =
     <<Cfg as SecureChannelConfig>::CompressionConfig as crate::config::CompressionConfig>::Compressor;
 pub type CompressionOf<Cfg> = CompressionManager<CompressorOf<Cfg>>;
 
+pub type ProtocolCodecOf<Cfg> =
+    <<Cfg as SecureChannelConfig>::ProtocolConfig as crate::config::ProtocolConfig>::Codec;
+
 pub trait SecureChannelConfig {
     type CryptoConfig: CryptoConfig;
     type CompressionConfig: CompressionConfig;
+    type ProtocolConfig: ProtocolConfig;
+
     fn crypto() -> CryptoOf<Self> {
         <Self::CryptoConfig as CryptoConfig>::crypto()
     }
@@ -88,11 +98,18 @@ impl<const LEVEL: u32> CompressionConfig for ZlibWithLevel<LEVEL> {
     }
 }
 
+pub struct Protobuf;
+
+impl ProtocolConfig for Protobuf {
+    type Codec = ProtobufCodec;
+}
+
 pub struct Config;
 
 impl SecureChannelConfig for Config {
     type CryptoConfig = DefaultSuite;
     type CompressionConfig = DefaultSuite;
+    type ProtocolConfig = Protobuf;
 }
 
 #[cfg(test)]
@@ -166,5 +183,6 @@ mod tests {
         let _: PhantomData<CompressorOf<Config>> = PhantomData::<NullCompressor>;
         let _: PhantomData<CompressionOf<Config>> =
             PhantomData::<CompressionManager<NullCompressor>>;
+        let _: PhantomData<ProtocolCodecOf<Config>> = PhantomData::<ProtobufCodec>;
     }
 }

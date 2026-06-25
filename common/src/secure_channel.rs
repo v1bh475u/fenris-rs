@@ -1,5 +1,7 @@
-use crate::{CompressionOf, Config, CryptoOf, FenrisError, Result, SecureChannelConfig, network};
-use prost::Message;
+use crate::{
+    CompressionOf, Config, CryptoOf, ProtocolCodec, ProtocolCodecOf, Result, SecureChannelConfig,
+    network,
+};
 use tokio::net::TcpStream;
 use tracing::debug;
 
@@ -76,10 +78,11 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         Ok(Self::new(stream, key, crypto, compressor))
     }
 
-    pub async fn send_msg<M: Message>(&mut self, msg: &M) -> Result<()> {
-        let mut buf = Vec::new();
-        msg.encode(&mut buf)
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))?;
+    pub async fn send_msg<M>(&mut self, msg: &M) -> Result<()>
+    where
+        ProtocolCodecOf<Cfg>: ProtocolCodec<M>,
+    {
+        let buf = <ProtocolCodecOf<Cfg> as ProtocolCodec<M>>::encode(msg)?;
         debug!("Serialized outgoing message: {} bytes", buf.len());
 
         // Compress -> Seal (iv||ciphertext) -> Frame+Send
@@ -89,7 +92,10 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         Ok(())
     }
 
-    pub async fn recv_msg<M: Message + Default>(&mut self) -> Result<M> {
+    pub async fn recv_msg<M>(&mut self) -> Result<M>
+    where
+        ProtocolCodecOf<Cfg>: ProtocolCodec<M>,
+    {
         let packet = network::receive_prefixed(&mut self.stream).await?;
         debug!("Received encrypted packet: {} bytes", packet.len());
 
@@ -97,11 +103,92 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         let decrypted = self.crypto.open(&packet, &self.key)?;
         let decompressed = self.compressor.decompress(&decrypted)?;
 
-        M::decode(decompressed.as_slice())
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))
+        <ProtocolCodecOf<Cfg> as ProtocolCodec<M>>::decode(decompressed.as_slice())
     }
 
     pub fn into_inner(self) -> TcpStream {
         self.stream
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DefaultSuite, FenrisError, KEY_SIZE, ProtocolConfig};
+    use tokio::net::{TcpListener, TcpStream};
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct TestMessage {
+        value: u8,
+    }
+
+    struct TestCodec;
+
+    impl ProtocolCodec<TestMessage> for TestCodec {
+        fn encode(message: &TestMessage) -> Result<Vec<u8>> {
+            Ok(vec![message.value])
+        }
+
+        fn decode(data: &[u8]) -> Result<TestMessage> {
+            match data {
+                [value] => Ok(TestMessage { value: *value }),
+                _ => Err(FenrisError::SerializationError(
+                    "invalid test message".to_string(),
+                )),
+            }
+        }
+    }
+
+    struct TestProtocol;
+
+    impl ProtocolConfig for TestProtocol {
+        type Codec = TestCodec;
+    }
+
+    struct TestConfig;
+
+    impl SecureChannelConfig for TestConfig {
+        type CryptoConfig = DefaultSuite;
+        type CompressionConfig = DefaultSuite;
+        type ProtocolConfig = TestProtocol;
+    }
+
+    async fn setup_connection() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server, _) = listener.accept().await.unwrap();
+        let client = client.await.unwrap();
+
+        (client, server)
+    }
+
+    #[tokio::test]
+    async fn secure_channel_uses_configured_non_protobuf_codec() {
+        let (client_stream, server_stream) = setup_connection().await;
+        let key = vec![9u8; KEY_SIZE];
+
+        let mut client = SecureChannel::<TestConfig>::new(
+            client_stream,
+            key.clone(),
+            TestConfig::crypto(),
+            TestConfig::compression(),
+        );
+        let mut server = SecureChannel::<TestConfig>::new(
+            server_stream,
+            key,
+            TestConfig::crypto(),
+            TestConfig::compression(),
+        );
+
+        let send_task =
+            tokio::spawn(async move { client.send_msg(&TestMessage { value: 42 }).await });
+
+        let received: TestMessage = server.recv_msg().await.unwrap();
+        send_task.await.unwrap().unwrap();
+
+        assert_eq!(received, TestMessage { value: 42 });
     }
 }
