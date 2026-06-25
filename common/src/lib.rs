@@ -6,6 +6,7 @@ pub mod file_ops;
 pub mod framing;
 pub mod network;
 pub mod proto;
+pub mod protocol;
 pub mod secure_channel;
 
 pub use compression::{CompressionManager, ZlibCompressor};
@@ -21,4 +22,5 @@ pub use network::{
     receive_prefixed, receive_prefixed_with_limits, send_prefixed, send_prefixed_with_limits,
 };
 pub use proto::{Request, RequestType, Response, ResponseType};
+pub use protocol::{ProtocolCodec, ProtobufCodec};
 pub use secure_channel::{DefaultSecureChannel, SecureChannel};
