@@ -183,9 +183,8 @@ mod tests {
             TestConfig::compression(),
         );
 
-        let send_task = tokio::spawn(async move {
-            client.send_msg(&TestMessage { value: 42 }).await
-        });
+        let send_task =
+            tokio::spawn(async move { client.send_msg(&TestMessage { value: 42 }).await });
 
         let received: TestMessage = server.recv_msg().await.unwrap();
         send_task.await.unwrap().unwrap();
