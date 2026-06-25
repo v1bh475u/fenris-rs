@@ -1,5 +1,7 @@
-use crate::{CompressionOf, Config, CryptoOf, FenrisError, Result, SecureChannelConfig, network};
-use prost::Message;
+use crate::{
+    CompressionOf, Config, CryptoOf, ProtocolCodec, ProtocolCodecOf, Result, SecureChannelConfig,
+    network,
+};
 use tokio::net::TcpStream;
 use tracing::debug;
 
@@ -76,10 +78,11 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         Ok(Self::new(stream, key, crypto, compressor))
     }
 
-    pub async fn send_msg<M: Message>(&mut self, msg: &M) -> Result<()> {
-        let mut buf = Vec::new();
-        msg.encode(&mut buf)
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))?;
+    pub async fn send_msg<M>(&mut self, msg: &M) -> Result<()>
+    where
+        ProtocolCodecOf<Cfg>: ProtocolCodec<M>,
+    {
+        let buf = <ProtocolCodecOf<Cfg> as ProtocolCodec<M>>::encode(msg)?;
         debug!("Serialized outgoing message: {} bytes", buf.len());
 
         // Compress -> Seal (iv||ciphertext) -> Frame+Send
@@ -89,7 +92,10 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         Ok(())
     }
 
-    pub async fn recv_msg<M: Message + Default>(&mut self) -> Result<M> {
+    pub async fn recv_msg<M>(&mut self) -> Result<M>
+    where
+        ProtocolCodecOf<Cfg>: ProtocolCodec<M>,
+    {
         let packet = network::receive_prefixed(&mut self.stream).await?;
         debug!("Received encrypted packet: {} bytes", packet.len());
 
@@ -97,8 +103,7 @@ impl<Cfg: SecureChannelConfig> SecureChannel<Cfg> {
         let decrypted = self.crypto.open(&packet, &self.key)?;
         let decompressed = self.compressor.decompress(&decrypted)?;
 
-        M::decode(decompressed.as_slice())
-            .map_err(|e| FenrisError::SerializationError(e.to_string()))
+        <ProtocolCodecOf<Cfg> as ProtocolCodec<M>>::decode(decompressed.as_slice())
     }
 
     pub fn into_inner(self) -> TcpStream {
