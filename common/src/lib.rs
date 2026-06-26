@@ -5,6 +5,7 @@ pub mod domain;
 pub mod error;
 pub mod file_ops;
 pub mod framing;
+pub mod identity;
 pub mod network;
 pub mod proto;
 pub mod protocol;
@@ -24,6 +25,7 @@ pub use domain::{
 pub use error::{FenrisError, Result};
 pub use file_ops::{DefaultFileOperations, FileMetadata, FileOperations};
 pub use framing::{DEFAULT_MAX_FRAME_SIZE, FrameLimits, LengthPrefixedFrame};
+pub use identity::{ServerIdentityKey, ServerIdentityPublicKey};
 pub use network::{
     receive_prefixed, receive_prefixed_with_limits, send_prefixed, send_prefixed_with_limits,
 };

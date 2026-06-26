@@ -35,6 +35,9 @@ pub enum FenrisError {
     #[error("Invalid protocol message")]
     InvalidProtocolMessage,
 
+    #[error("Authentication error: {0}")]
+    AuthenticationError(String),
+
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
