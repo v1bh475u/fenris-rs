@@ -27,4 +27,4 @@ pub use network::{
 pub use proto::{Request, RequestType, Response, ResponseType};
 pub use protocol::{ProtobufCodec, ProtocolCodec};
 pub use secure_channel::{DefaultSecureChannel, SecureChannel};
-pub use storage::StorageBackend;
+pub use storage::{StorageBackend, TokioFsStorage};
