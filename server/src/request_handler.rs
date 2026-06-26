@@ -1,7 +1,4 @@
-use common::{
-    FenrisError, FileOperations, Request, RequestType, Response, ResponseType, Result,
-    proto::response,
-};
+use common::{FenrisCommand, FenrisMetadata, FenrisOutput, FenrisError, FileOperations, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -15,293 +12,223 @@ impl RequestHandler {
         Self { file_ops }
     }
 
-    fn resolve_path(&self, path: &str, current_dir: &Path) -> PathBuf {
-        if path.is_empty() || path == "." {
+    fn resolve_path(&self, path: &Path, current_dir: &Path) -> PathBuf {
+        if path.as_os_str().is_empty() || path == Path::new(".") {
             current_dir.to_path_buf()
-        } else if path.starts_with('/') {
-            PathBuf::from(path)
+        } else if path.is_absolute() {
+            path.to_path_buf()
         } else {
             current_dir.join(path)
         }
     }
 
-    pub async fn process_request(
+    pub async fn process_command(
         &self,
         client_id: u64,
-        request: &Request,
+        command: &FenrisCommand,
         current_dir: &mut PathBuf,
-    ) -> Response {
+    ) -> FenrisOutput {
         debug!(
-            "Processing request from client {} in dir {:?}:  command={}",
-            client_id, current_dir, request.command
+            "Processing command from client {} in dir {:?}: {:?}",
+            client_id, current_dir, command
         );
 
-        let request_type = match RequestType::try_from(request.command) {
-            Ok(rt) => rt,
-            Err(_) => {
-                return self.error_response("Invalid request type");
-            }
-        };
-
-        match self
-            .handle_request(request_type, request, current_dir)
-            .await
-        {
-            Ok(response) => response,
+        match self.handle_command(command, current_dir).await {
+            Ok(output) => output,
             Err(e) => {
-                error!("Request failed: {}", e);
-                self.error_response(&e.to_string())
+                error!("Command failed: {}", e);
+                FenrisOutput::Error {
+                    message: e.to_string(),
+                }
             }
         }
     }
 
-    async fn handle_request(
+    async fn handle_command(
         &self,
-        request_type: RequestType,
-        request: &Request,
+        command: &FenrisCommand,
         current_dir: &mut PathBuf,
-    ) -> Result<Response> {
-        match request_type {
-            RequestType::Ping => self.handle_ping().await,
-            RequestType::CreateFile => {
-                self.handle_create_file(&request.filename, current_dir)
-                    .await
+    ) -> Result<FenrisOutput> {
+        match command {
+            FenrisCommand::Ping => Ok(FenrisOutput::Pong),
+            FenrisCommand::CreateObject { path } => {
+                self.handle_create_object(path, current_dir).await
             }
-            RequestType::ReadFile => self.handle_read_file(&request.filename, current_dir).await,
-            RequestType::WriteFile => {
-                self.handle_write_file(&request.filename, &request.data, current_dir)
-                    .await
+            FenrisCommand::ReadObject { path } => self.handle_read_object(path, current_dir).await,
+            FenrisCommand::WriteObject { path, data } => {
+                self.handle_write_object(path, data, current_dir).await
             }
-            RequestType::DeleteFile => {
-                self.handle_delete_file(&request.filename, current_dir)
-                    .await
+            FenrisCommand::AppendObject { path, data } => {
+                self.handle_append_object(path, data, current_dir).await
             }
-            RequestType::AppendFile => {
-                self.handle_append_file(&request.filename, &request.data, current_dir)
-                    .await
+            FenrisCommand::DeleteObject { path } => {
+                self.handle_delete_object(path, current_dir).await
             }
-            RequestType::UploadFile => {
-                self.handle_upload(&request.filename, &request.data, current_dir)
-                    .await
+            FenrisCommand::UploadObject { path, data } => {
+                self.handle_upload_object(path, data, current_dir).await
             }
-            RequestType::InfoFile => self.handle_file_info(&request.filename, current_dir).await,
-            RequestType::CreateDir => self.handle_create_dir(&request.filename, current_dir).await,
-            RequestType::ListDir => self.handle_list_dir(&request.filename, current_dir).await,
-            RequestType::DeleteDir => self.handle_delete_dir(&request.filename, current_dir).await,
-            RequestType::ChangeDir => self.handle_change_dir(&request.filename, current_dir).await,
-            RequestType::Terminate => Err(FenrisError::InvalidRequest(
-                "Terminate request should be handled separately".to_string(),
-            )),
+            FenrisCommand::ObjectInfo { path } => self.handle_object_info(path, current_dir).await,
+            FenrisCommand::CreateNamespace { path } => {
+                self.handle_create_namespace(path, current_dir).await
+            }
+            FenrisCommand::ListNamespace { path } => {
+                self.handle_list_namespace(path, current_dir).await
+            }
+            FenrisCommand::ChangeNamespace { path } => {
+                self.handle_change_namespace(path, current_dir).await
+            }
+            FenrisCommand::DeleteNamespace { path } => {
+                self.handle_delete_namespace(path, current_dir).await
+            }
+            FenrisCommand::Terminate => Ok(FenrisOutput::Terminated),
         }
     }
 
-    async fn handle_ping(&self) -> Result<Response> {
-        Ok(Response {
-            r#type: ResponseType::Pong as i32,
-            success: true,
-            error_message: String::new(),
-            data: vec![],
-            details: None,
-        })
-    }
-
-    async fn handle_create_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    async fn handle_create_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.create_file(&path).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!("File created: {}", path.to_string_lossy()).into_bytes(),
-            details: None,
+        Ok(FenrisOutput::Success {
+            message: format!("File created: {}", path.to_string_lossy()),
         })
     }
 
-    async fn handle_read_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    async fn handle_read_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         let data = self.file_ops.read_file(&path).await?;
 
-        Ok(Response {
-            r#type: ResponseType::FileContent as i32,
-            success: true,
-            error_message: String::new(),
-            data,
-            details: None,
-        })
+        Ok(FenrisOutput::ObjectContent { data })
     }
 
-    async fn handle_write_file(
+    async fn handle_write_object(
         &self,
-        filename: &str,
+        path: &Path,
         data: &[u8],
         current_dir: &Path,
-    ) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.write_file(&path, data).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!("File written: {} bytes", data.len()).into_bytes(),
-            details: None,
+        Ok(FenrisOutput::Success {
+            message: format!("File written: {} bytes", data.len()),
         })
     }
 
-    async fn handle_delete_file(&self, filename: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
-        self.file_ops.delete_file(&path).await?;
-
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!("File deleted: {}", path.to_string_lossy()).into_bytes(),
-            details: None,
-        })
-    }
-
-    async fn handle_append_file(
+    async fn handle_append_object(
         &self,
-        filename: &str,
+        path: &Path,
         data: &[u8],
         current_dir: &Path,
-    ) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.append_file(&path, data).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!(
+        Ok(FenrisOutput::Success {
+            message: format!(
                 "Appended {} bytes to {}",
                 data.len(),
                 path.to_string_lossy()
-            )
-            .into_bytes(),
-            details: None,
+            ),
         })
     }
 
-    async fn handle_upload(
+    async fn handle_delete_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
+        self.file_ops.delete_file(&path).await?;
+
+        Ok(FenrisOutput::Success {
+            message: format!("File deleted: {}", path.to_string_lossy()),
+        })
+    }
+
+    async fn handle_upload_object(
         &self,
-        filename: &str,
+        path: &Path,
         data: &[u8],
         current_dir: &Path,
-    ) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.write_file(&path, data).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!(
+        Ok(FenrisOutput::Success {
+            message: format!(
                 "Uploaded {} bytes to {}",
                 data.len(),
                 path.to_string_lossy()
-            )
-            .into_bytes(),
-            details: None,
+            ),
         })
     }
 
-    async fn handle_file_info(&self, filename: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(filename, current_dir);
+    async fn handle_object_info(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         let metadata = self.file_ops.file_info(&path).await?;
 
-        let file_info = common::proto::FileInfo {
-            name: metadata.name,
-            size: metadata.size,
-            is_directory: metadata.is_directory,
-            modified_time: metadata.modified_time,
-            permissions: metadata.permissions,
-        };
-
-        Ok(Response {
-            r#type: ResponseType::FileInfo as i32,
-            success: true,
-            error_message: String::new(),
-            data: vec![],
-            details: Some(response::Details::FileInfo(file_info)),
+        Ok(FenrisOutput::ObjectInfo {
+            metadata: metadata.into(),
         })
     }
 
-    async fn handle_create_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(dirname, current_dir);
+    async fn handle_create_namespace(
+        &self,
+        path: &Path,
+        current_dir: &Path,
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.create_dir(&path).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!("Directory created: {}", path.to_string_lossy()).into_bytes(),
-            details: None,
+        Ok(FenrisOutput::Success {
+            message: format!("Directory created: {}", path.to_string_lossy()),
         })
     }
 
-    async fn handle_list_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(dirname, current_dir);
-
-        let entries = self.file_ops.list_dir(&path).await?;
-
-        let file_entries: Vec<common::proto::FileInfo> = entries
+    async fn handle_list_namespace(
+        &self,
+        path: &Path,
+        current_dir: &Path,
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
+        let entries = self
+            .file_ops
+            .list_dir(&path)
+            .await?
             .into_iter()
-            .map(|e| common::proto::FileInfo {
-                name: e.name,
-                size: e.size,
-                is_directory: e.is_directory,
-                modified_time: e.modified_time,
-                permissions: e.permissions,
-            })
+            .map(FenrisMetadata::from)
             .collect();
 
-        let listing = common::proto::DirectoryListing {
-            entries: file_entries,
-        };
-
-        Ok(Response {
-            r#type: ResponseType::DirListing as i32,
-            success: true,
-            error_message: String::new(),
-            data: vec![],
-            details: Some(response::Details::DirectoryListing(listing)),
-        })
+        Ok(FenrisOutput::NamespaceListing { entries })
     }
 
-    async fn handle_delete_dir(&self, dirname: &str, current_dir: &Path) -> Result<Response> {
-        let path = self.resolve_path(dirname, current_dir);
+    async fn handle_delete_namespace(
+        &self,
+        path: &Path,
+        current_dir: &Path,
+    ) -> Result<FenrisOutput> {
+        let path = self.resolve_path(path, current_dir);
         self.file_ops.delete_dir(&path).await?;
 
-        Ok(Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: format!("Directory deleted: {}", path.to_string_lossy()).into_bytes(),
-            details: None,
+        Ok(FenrisOutput::Success {
+            message: format!("Directory deleted: {}", path.to_string_lossy()),
         })
     }
 
-    async fn handle_change_dir(
+    async fn handle_change_namespace(
         &self,
-        dirname: &str,
+        path: &Path,
         current_dir: &mut PathBuf,
-    ) -> Result<Response> {
-        let target_path = if dirname.is_empty() || dirname == "~" {
+    ) -> Result<FenrisOutput> {
+        let target_path = if path.as_os_str().is_empty() || path == Path::new("~") {
             PathBuf::from("/")
-        } else if dirname == "." {
+        } else if path == Path::new(".") {
             current_dir.clone()
-        } else if dirname == ".." {
+        } else if path == Path::new("..") {
             current_dir
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("/"))
-        } else if dirname.starts_with('/') {
-            PathBuf::from(dirname)
+        } else if path.is_absolute() {
+            path.to_path_buf()
         } else {
-            current_dir.join(dirname)
+            current_dir.join(path)
         };
 
         if !self.file_ops.is_dir(&target_path).await {
@@ -312,31 +239,14 @@ impl RequestHandler {
 
         *current_dir = target_path.clone();
 
-        let dir_str = target_path.to_string_lossy().to_string();
-        Ok(Response {
-            r#type: ResponseType::ChangedDir as i32,
-            success: true,
-            error_message: String::new(),
-            data: dir_str.as_bytes().to_vec(),
-            details: None,
-        })
-    }
-
-    fn error_response(&self, message: &str) -> Response {
-        Response {
-            r#type: ResponseType::Error as i32,
-            success: false,
-            error_message: message.to_string(),
-            data: vec![],
-            details: None,
-        }
+        Ok(FenrisOutput::NamespaceChanged { path: target_path })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::{FenrisError, FileMetadata};
+    use common::FileMetadata;
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
@@ -413,6 +323,7 @@ mod tests {
                     permissions: 0o644,
                 });
             }
+
             let dirs = self.dirs.lock().unwrap();
             if dirs.contains(path) {
                 return Ok(FileMetadata {
@@ -427,6 +338,7 @@ mod tests {
                     permissions: 0o755,
                 });
             }
+
             Err(FenrisError::FileOperationError("NotFound".into()))
         }
 
@@ -438,10 +350,10 @@ mod tests {
         async fn list_dir(&self, path: &Path) -> Result<Vec<FileMetadata>> {
             let mut entries = Vec::new();
             let dirs = self.dirs.lock().unwrap();
-            for d in dirs.iter() {
-                if d.parent() == Some(path) {
+            for dir in dirs.iter() {
+                if dir.parent() == Some(path) {
                     entries.push(FileMetadata {
-                        name: d
+                        name: dir
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -453,11 +365,12 @@ mod tests {
                     });
                 }
             }
+
             let files = self.files.lock().unwrap();
-            for (f, data) in files.iter() {
-                if f.parent() == Some(path) {
+            for (file, data) in files.iter() {
+                if file.parent() == Some(path) {
                     entries.push(FileMetadata {
-                        name: f
+                        name: file
                             .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
@@ -469,6 +382,7 @@ mod tests {
                     });
                 }
             }
+
             Ok(entries)
         }
 
@@ -504,34 +418,31 @@ mod tests {
     async fn test_ping() {
         let (handler, _) = create_handler();
         let mut current_dir = PathBuf::from("/");
-        let request = Request {
-            command: RequestType::Ping as i32,
-            filename: "".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
 
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert_eq!(response.r#type, ResponseType::Pong as i32);
-        assert!(response.success);
+        let output = handler
+            .process_command(1, &FenrisCommand::Ping, &mut current_dir)
+            .await;
+
+        assert_eq!(output, FenrisOutput::Pong);
     }
 
     #[tokio::test]
     async fn test_create_file() {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/home");
-        // Pre-create /home for realism, though mock doesn't strictly enforce parent existence for simple ops
         ops.create_dir(&current_dir).await.unwrap();
 
-        let request = Request {
-            command: RequestType::CreateFile as i32,
-            filename: "test.txt".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::CreateObject {
+                    path: PathBuf::from("test.txt"),
+                },
+                &mut current_dir,
+            )
+            .await;
 
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
+        assert!(matches!(output, FenrisOutput::Success { .. }));
 
         let files = ops.files.lock().unwrap();
         assert!(files.contains_key(&PathBuf::from("/home/test.txt")));
@@ -543,31 +454,29 @@ mod tests {
         let mut current_dir = PathBuf::from("/");
 
         let data = b"Hello, World!".to_vec();
-        let request_write = Request {
-            command: RequestType::WriteFile as i32,
-            filename: "hello.txt".to_string(),
-            data: data.clone(),
-            ip_addr: 0,
-        };
-
-        let resp_write = handler
-            .process_request(1, &request_write, &mut current_dir)
+        let write_output = handler
+            .process_command(
+                1,
+                &FenrisCommand::WriteObject {
+                    path: PathBuf::from("hello.txt"),
+                    data: data.clone(),
+                },
+                &mut current_dir,
+            )
             .await;
-        assert!(resp_write.success);
+        assert!(matches!(write_output, FenrisOutput::Success { .. }));
 
-        let request_read = Request {
-            command: RequestType::ReadFile as i32,
-            filename: "hello.txt".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-
-        let resp_read = handler
-            .process_request(1, &request_read, &mut current_dir)
+        let read_output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ReadObject {
+                    path: PathBuf::from("hello.txt"),
+                },
+                &mut current_dir,
+            )
             .await;
-        assert!(resp_read.success);
-        assert_eq!(resp_read.data, data);
-        assert_eq!(resp_read.r#type, ResponseType::FileContent as i32);
+
+        assert_eq!(read_output, FenrisOutput::ObjectContent { data });
     }
 
     #[tokio::test]
@@ -579,15 +488,18 @@ mod tests {
             .await
             .unwrap();
 
-        let request = Request {
-            command: RequestType::AppendFile as i32,
-            filename: "log.txt".to_string(),
-            data: b" - More".to_vec(),
-            ip_addr: 0,
-        };
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::AppendObject {
+                    path: PathBuf::from("log.txt"),
+                    data: b" - More".to_vec(),
+                },
+                &mut current_dir,
+            )
+            .await;
 
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
+        assert!(matches!(output, FenrisOutput::Success { .. }));
 
         let content = ops.read_file(Path::new("/log.txt")).await.unwrap();
         assert_eq!(content, b"Init - More");
@@ -600,15 +512,17 @@ mod tests {
 
         ops.create_file(Path::new("/temp.txt")).await.unwrap();
 
-        let request = Request {
-            command: RequestType::DeleteFile as i32,
-            filename: "temp.txt".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::DeleteObject {
+                    path: PathBuf::from("temp.txt"),
+                },
+                &mut current_dir,
+            )
+            .await;
 
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
+        assert!(matches!(output, FenrisOutput::Success { .. }));
         assert!(!ops.exists(Path::new("/temp.txt")).await);
     }
 
@@ -619,38 +533,51 @@ mod tests {
 
         ops.create_dir(Path::new("/data")).await.unwrap();
 
-        // cd data
-        let req1 = Request {
-            command: RequestType::ChangeDir as i32,
-            filename: "data".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-        let resp1 = handler.process_request(1, &req1, &mut current_dir).await;
-        assert!(resp1.success);
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ChangeNamespace {
+                    path: PathBuf::from("data"),
+                },
+                &mut current_dir,
+            )
+            .await;
+        assert_eq!(
+            output,
+            FenrisOutput::NamespaceChanged {
+                path: PathBuf::from("/data")
+            }
+        );
         assert_eq!(current_dir, PathBuf::from("/data"));
 
-        // cd ..
-        let req2 = Request {
-            command: RequestType::ChangeDir as i32,
-            filename: "..".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-        let resp2 = handler.process_request(1, &req2, &mut current_dir).await;
-        assert!(resp2.success);
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ChangeNamespace {
+                    path: PathBuf::from(".."),
+                },
+                &mut current_dir,
+            )
+            .await;
+        assert_eq!(
+            output,
+            FenrisOutput::NamespaceChanged {
+                path: PathBuf::from("/")
+            }
+        );
         assert_eq!(current_dir, PathBuf::from("/"));
 
-        // cd to non-existent
-        let req3 = Request {
-            command: RequestType::ChangeDir as i32,
-            filename: "missing".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-        let resp3 = handler.process_request(1, &req3, &mut current_dir).await;
-        assert!(!resp3.success);
-        assert_eq!(current_dir, PathBuf::from("/")); // Should not change
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ChangeNamespace {
+                    path: PathBuf::from("missing"),
+                },
+                &mut current_dir,
+            )
+            .await;
+        assert!(matches!(output, FenrisOutput::Error { .. }));
+        assert_eq!(current_dir, PathBuf::from("/"));
     }
 
     #[tokio::test]
@@ -662,25 +589,24 @@ mod tests {
         ops.create_file(Path::new("/data/f1.txt")).await.unwrap();
         ops.create_dir(Path::new("/data/sub")).await.unwrap();
 
-        let request = Request {
-            command: RequestType::ListDir as i32,
-            filename: "data".to_string(),
-            data: vec![],
-            ip_addr: 0,
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ListNamespace {
+                    path: PathBuf::from("data"),
+                },
+                &mut current_dir,
+            )
+            .await;
+
+        let FenrisOutput::NamespaceListing { entries } = output else {
+            panic!("Expected namespace listing");
         };
 
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
-
-        if let Some(common::proto::response::Details::DirectoryListing(listing)) = response.details
-        {
-            assert_eq!(listing.entries.len(), 2);
-            let names: Vec<String> = listing.entries.iter().map(|e| e.name.clone()).collect();
-            assert!(names.contains(&"f1.txt".to_string()));
-            assert!(names.contains(&"sub".to_string()));
-        } else {
-            panic!("Expected DirectoryListing details");
-        }
+        assert_eq!(entries.len(), 2);
+        let names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
+        assert!(names.contains(&"f1.txt".to_string()));
+        assert!(names.contains(&"sub".to_string()));
     }
 
     #[tokio::test]
@@ -688,28 +614,28 @@ mod tests {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
 
-        let req_create = Request {
-            command: RequestType::CreateDir as i32,
-            filename: "newdir".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-        let resp_create = handler
-            .process_request(1, &req_create, &mut current_dir)
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::CreateNamespace {
+                    path: PathBuf::from("newdir"),
+                },
+                &mut current_dir,
+            )
             .await;
-        assert!(resp_create.success);
+        assert!(matches!(output, FenrisOutput::Success { .. }));
         assert!(ops.is_dir(Path::new("/newdir")).await);
 
-        let req_delete = Request {
-            command: RequestType::DeleteDir as i32,
-            filename: "newdir".to_string(),
-            data: vec![],
-            ip_addr: 0,
-        };
-        let resp_delete = handler
-            .process_request(1, &req_delete, &mut current_dir)
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::DeleteNamespace {
+                    path: PathBuf::from("newdir"),
+                },
+                &mut current_dir,
+            )
             .await;
-        assert!(resp_delete.success);
+        assert!(matches!(output, FenrisOutput::Success { .. }));
         assert!(!ops.is_dir(Path::new("/newdir")).await);
     }
 
@@ -719,20 +645,22 @@ mod tests {
         let mut current_dir = PathBuf::from("/");
         ops.create_file(Path::new("/info.txt")).await.unwrap();
 
-        let request = Request {
-            command: RequestType::InfoFile as i32,
-            filename: "info.txt".to_string(),
-            data: vec![],
-            ip_addr: 0,
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ObjectInfo {
+                    path: PathBuf::from("info.txt"),
+                },
+                &mut current_dir,
+            )
+            .await;
+
+        let FenrisOutput::ObjectInfo { metadata } = output else {
+            panic!("Expected object info");
         };
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
-        if let Some(common::proto::response::Details::FileInfo(info)) = response.details {
-            assert_eq!(info.name, "info.txt");
-            assert!(!info.is_directory);
-        } else {
-            panic!("Expected FileInfo details");
-        }
+
+        assert_eq!(metadata.name, "info.txt");
+        assert!(!metadata.is_namespace);
     }
 
     #[tokio::test]
@@ -741,14 +669,17 @@ mod tests {
         let mut current_dir = PathBuf::from("/");
 
         let data = b"Upload Data".to_vec();
-        let request = Request {
-            command: RequestType::UploadFile as i32,
-            filename: "upload.dat".to_string(),
-            data: data.clone(),
-            ip_addr: 0,
-        };
-        let response = handler.process_request(1, &request, &mut current_dir).await;
-        assert!(response.success);
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::UploadObject {
+                    path: PathBuf::from("upload.dat"),
+                    data: data.clone(),
+                },
+                &mut current_dir,
+            )
+            .await;
+        assert!(matches!(output, FenrisOutput::Success { .. }));
 
         let file_data = ops.read_file(Path::new("/upload.dat")).await.unwrap();
         assert_eq!(file_data, data);
