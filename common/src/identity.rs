@@ -7,6 +7,7 @@ pub const SERVER_IDENTITY_KEY_SIZE: usize = 32;
 pub const SERVER_IDENTITY_SIGNATURE_SIZE: usize = 64;
 
 const SERVER_IDENTITY_TRANSCRIPT_LABEL: &[u8] = b"fenris-server-identity-v1";
+const AUTHENTICATED_KDF_CONTEXT_LABEL: &[u8] = b"fenris-authenticated-kdf-v1";
 
 #[derive(Clone)]
 pub struct ServerIdentityKey {
@@ -175,6 +176,13 @@ pub(crate) fn server_identity_transcript(
     append_transcript_part(&mut transcript, server_identity_public_key.as_bytes());
     append_transcript_part(&mut transcript, kdf_context);
     transcript
+}
+
+pub(crate) fn authenticated_kdf_context(transcript: &[u8]) -> Vec<u8> {
+    let mut context = Vec::new();
+    append_transcript_part(&mut context, AUTHENTICATED_KDF_CONTEXT_LABEL);
+    append_transcript_part(&mut context, transcript);
+    context
 }
 
 fn append_transcript_part(out: &mut Vec<u8>, part: &[u8]) {
