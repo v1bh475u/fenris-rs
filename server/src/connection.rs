@@ -1,6 +1,4 @@
-use common::{
-    DefaultSecureChannel, FenrisError, Request, RequestType, Response, ResponseType, Result,
-};
+use common::{DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Result};
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -58,17 +56,17 @@ impl Connection {
                     break;
                 }
 
-                result = self.receive_request() => {
+                result = self.receive_command() => {
                     match result {
-                        Ok(request) => {
-                            if Self::is_terminate(&request) {
+                        Ok(command) => {
+                            if Self::is_terminate(&command) {
                                 self.send_terminate_response().await?;
                                 break;
                             }
 
-                            let response = self.handler.process_request(
+                            let response = self.handler.process_command(
                                 self.id,
-                                &request,
+                                &command,
                                 &mut self.current_dir,
                             ).await;
 
@@ -90,7 +88,7 @@ impl Connection {
         Ok(())
     }
 
-    async fn receive_request(&mut self) -> Result<Request> {
+    async fn receive_command(&mut self) -> Result<FenrisCommand> {
         if let Some(timeout) = self.config.idle_timeout {
             tokio::time::timeout(timeout, self.channel.recv_msg())
                 .await
@@ -105,18 +103,11 @@ impl Connection {
         }
     }
 
-    fn is_terminate(request: &Request) -> bool {
-        RequestType::try_from(request.command).ok() == Some(RequestType::Terminate)
+    fn is_terminate(command: &FenrisCommand) -> bool {
+        matches!(command, FenrisCommand::Terminate)
     }
 
     async fn send_terminate_response(&mut self) -> Result<()> {
-        let response = Response {
-            r#type: ResponseType::Terminated as i32,
-            success: true,
-            error_message: String::new(),
-            data: vec![],
-            details: None,
-        };
-        self.channel.send_msg(&response).await
+        self.channel.send_msg(&FenrisOutput::Terminated).await
     }
 }
