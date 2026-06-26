@@ -66,7 +66,10 @@ impl StorageBackend for TokioFsStorage {
     }
 
     async fn metadata(&self, path: &Path) -> Result<FenrisMetadata> {
-        self.file_ops.file_info(path).await.map(FenrisMetadata::from)
+        self.file_ops
+            .file_info(path)
+            .await
+            .map(FenrisMetadata::from)
     }
 
     async fn create_namespace(&self, path: &Path) -> Result<()> {
@@ -165,10 +168,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = storage(&temp_dir);
 
-        storage
-            .create_namespace(Path::new("logs"))
-            .await
-            .unwrap();
+        storage.create_namespace(Path::new("logs")).await.unwrap();
         storage
             .append_object(Path::new("logs/today.txt"), b"entry")
             .await
@@ -206,10 +206,7 @@ mod tests {
             .put_object(Path::new("data.txt"), b"hello")
             .await
             .unwrap();
-        storage
-            .create_namespace(Path::new("docs"))
-            .await
-            .unwrap();
+        storage.create_namespace(Path::new("docs")).await.unwrap();
 
         let object = storage.metadata(Path::new("data.txt")).await.unwrap();
         assert_eq!(object.name, "data.txt");
@@ -226,10 +223,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage = storage(&temp_dir);
 
-        storage
-            .create_namespace(Path::new("docs"))
-            .await
-            .unwrap();
+        storage.create_namespace(Path::new("docs")).await.unwrap();
         storage
             .put_object(Path::new("docs/a.txt"), b"a")
             .await
@@ -260,10 +254,7 @@ mod tests {
             .put_object(Path::new("data.txt"), b"hello")
             .await
             .unwrap();
-        storage
-            .create_namespace(Path::new("docs"))
-            .await
-            .unwrap();
+        storage.create_namespace(Path::new("docs")).await.unwrap();
 
         assert!(storage.exists(Path::new("data.txt")).await);
         assert!(storage.is_object(Path::new("data.txt")).await);
