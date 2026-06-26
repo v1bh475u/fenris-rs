@@ -33,6 +33,7 @@ mod tests {
             filename: "test.txt".to_string(),
             ip_addr: 0,
             data: vec![1, 2, 3],
+            details: None,
         };
 
         let bytes = request.to_bytes().unwrap();

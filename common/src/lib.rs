@@ -17,7 +17,10 @@ pub use config::{
     ProtocolCodecOf, ProtocolConfig, SecureChannelConfig, Zlib, ZlibWithLevel,
 };
 pub use crypto::{CryptoManager, IV_SIZE, KEY_SIZE, TAG_SIZE};
-pub use domain::{FenrisCommand, FenrisMetadata, FenrisOutput};
+pub use domain::{
+    DEFAULT_TRANSFER_CHUNK_SIZE, FenrisCommand, FenrisMetadata, FenrisOutput, ObjectWriteMode,
+    TransferChunk,
+};
 pub use error::{FenrisError, Result};
 pub use file_ops::{DefaultFileOperations, FileMetadata, FileOperations};
 pub use framing::{DEFAULT_MAX_FRAME_SIZE, FrameLimits, LengthPrefixedFrame};
