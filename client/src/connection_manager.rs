@@ -110,7 +110,7 @@ impl ConnectionManager {
 
 impl Default for ConnectionManager {
     fn default() -> Self {
-        Self::new(RequestManager::default(), ResponseManager::default())
+        Self::new(RequestManager, ResponseManager)
     }
 }
 
@@ -122,8 +122,8 @@ mod tests {
     #[test]
     fn test_connection_manager_creation() {
         let server_info = ServerInfo::new("127.0.0.1".to_string(), 8080);
-        let request_manager = RequestManager::default();
-        let response_manager: ResponseManager = Default::default();
+        let request_manager = RequestManager;
+        let response_manager = ResponseManager;
 
         let mut manager = ConnectionManager::new(request_manager, response_manager);
         manager.set_server_info(server_info.clone()).unwrap();
@@ -142,8 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_command_when_disconnected() {
-        let mut manager =
-            ConnectionManager::new(RequestManager::default(), ResponseManager::default());
+        let mut manager = ConnectionManager::new(RequestManager, ResponseManager);
 
         let result = manager.send_command("ping").await;
 
