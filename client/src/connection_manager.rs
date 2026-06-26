@@ -1,6 +1,6 @@
 use common::{
     DEFAULT_TRANSFER_CHUNK_SIZE, DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput,
-    ObjectWriteMode, Result, TransferChunk,
+    ObjectWriteMode, Result, ServerIdentityPublicKey, TransferChunk,
 };
 
 use std::{io, path::PathBuf};
@@ -34,6 +34,7 @@ impl ServerInfo {
 }
 pub struct ConnectionManager {
     server_info: Option<ServerInfo>,
+    server_identity: Option<ServerIdentityPublicKey>,
     channel: Option<DefaultSecureChannel>,
     request_manager: RequestManager,
     response_manager: ResponseManager,
@@ -43,10 +44,23 @@ impl ConnectionManager {
     pub fn new(request_manager: RequestManager, response_manager: ResponseManager) -> Self {
         Self {
             server_info: None,
+            server_identity: None,
             channel: None,
             request_manager,
             response_manager,
         }
+    }
+
+    pub fn with_server_identity(
+        request_manager: RequestManager,
+        response_manager: ResponseManager,
+        server_identity: ServerIdentityPublicKey,
+    ) -> Self {
+        let mut manager = Self::new(request_manager, response_manager);
+        manager
+            .set_server_identity(server_identity)
+            .expect("new connection manager cannot already be connected");
+        manager
     }
 
     pub fn is_connected(&self) -> bool {
@@ -61,13 +75,19 @@ impl ConnectionManager {
                 "Server info not set",
             )))?
             .to_socket_addr();
+        let expected_identity = self.server_identity.ok_or_else(|| {
+            FenrisError::AuthenticationError(
+                "server identity is required before connecting".to_string(),
+            )
+        })?;
         info!("Connecting to server at {}", addr);
 
         let stream = TcpStream::connect(addr)
             .await
             .map_err(FenrisError::NetworkError)?;
 
-        let channel = DefaultSecureChannel::client_handshake(stream).await?;
+        let channel =
+            DefaultSecureChannel::client_handshake_authenticated(stream, expected_identity).await?;
         self.channel = Some(channel);
 
         info!("Successfully connected to server");
@@ -309,6 +329,18 @@ impl ConnectionManager {
         self.server_info = Some(server_info);
         Ok(())
     }
+
+    pub fn set_server_identity(&mut self, server_identity: ServerIdentityPublicKey) -> Result<()> {
+        if self.is_connected() {
+            tracing::error!("Cannot change server identity while connected");
+            return Err(FenrisError::NetworkError(io::Error::other(
+                "Cannot change server identity while connected",
+            )));
+        }
+
+        self.server_identity = Some(server_identity);
+        Ok(())
+    }
 }
 
 fn expect_transfer_progress(output: FenrisOutput) -> Result<()> {
@@ -350,6 +382,7 @@ mod tests {
 
         let manager = ConnectionManager {
             server_info: None,
+            server_identity: None,
             channel: Some(client.unwrap()),
             request_manager: RequestManager,
             response_manager: ResponseManager,
@@ -374,6 +407,16 @@ mod tests {
     }
 
     #[test]
+    fn test_connection_manager_stores_server_identity() {
+        let identity = common::ServerIdentityKey::generate().public_key();
+        let mut manager = ConnectionManager::new(RequestManager, ResponseManager);
+
+        manager.set_server_identity(identity).unwrap();
+
+        assert_eq!(manager.server_identity, Some(identity));
+    }
+
+    #[test]
     fn test_server_info_to_socket_addr() {
         let info = ServerInfo::new("localhost".to_string(), 8080);
         assert_eq!(info.to_socket_addr(), "localhost:8080");
@@ -390,6 +433,22 @@ mod tests {
             Err(FenrisError::ConnectionClosed) => {} // Expected
             _ => panic!("Expected ConnectionClosed error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_connect_requires_server_identity_before_network_connection() {
+        let mut manager = ConnectionManager::new(RequestManager, ResponseManager);
+        manager
+            .set_server_info(ServerInfo::new("127.0.0.1".to_string(), 9))
+            .unwrap();
+
+        let result = manager.connect().await;
+
+        assert!(matches!(
+            result,
+            Err(FenrisError::AuthenticationError(message))
+                if message.contains("server identity is required")
+        ));
     }
 
     #[tokio::test]
