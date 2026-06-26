@@ -242,6 +242,84 @@ mod tests {
     }
 
     #[test]
+    fn test_format_object_content() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::ObjectContent {
+            data: b"hello".to_vec(),
+        });
+
+        assert!(formatted.success);
+        assert!(formatted.message.contains("5 bytes"));
+        assert_eq!(formatted.details.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_format_object_info() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::ObjectInfo {
+            metadata: FenrisMetadata {
+                name: "file.txt".to_string(),
+                size: 12,
+                is_namespace: false,
+                modified_time: 0,
+                permissions: 0o644,
+            },
+        });
+
+        assert!(formatted.success);
+        assert!(formatted.message.contains("File information"));
+        assert!(formatted.details.unwrap().contains("file.txt"));
+    }
+
+    #[test]
+    fn test_format_namespace_listing() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::NamespaceListing {
+            entries: vec![FenrisMetadata {
+                name: "dir".to_string(),
+                size: 0,
+                is_namespace: true,
+                modified_time: 0,
+                permissions: 0o755,
+            }],
+        });
+
+        assert!(formatted.success);
+        assert!(formatted.message.contains("Directory listing"));
+        assert!(formatted.details.unwrap().contains("dir"));
+    }
+
+    #[test]
+    fn test_format_namespace_changed() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::NamespaceChanged {
+            path: "/tmp".into(),
+        });
+
+        assert!(formatted.success);
+        assert_eq!(formatted.current_dir.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn test_format_error_and_terminated() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::Error {
+            message: "bad".to_string(),
+        });
+        assert!(!formatted.success);
+        assert_eq!(formatted.message, "bad");
+
+        let formatted = manager.format_response(&FenrisOutput::Terminated);
+        assert!(formatted.success);
+        assert!(formatted.message.contains("terminated"));
+    }
+
+    #[test]
     fn test_format_size() {
         assert_eq!(format_size(0), "0 B");
         assert_eq!(format_size(1023), "1023 B");
