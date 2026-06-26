@@ -1,6 +1,5 @@
 use common::{
-    DefaultSecureChannel, FenrisError, Result,
-    proto::{Request, Response},
+    DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Response, Result,
 };
 
 use std::io::{self};
@@ -82,17 +81,21 @@ impl ConnectionManager {
         let request = self.request_manager.build_request(command)?;
 
         let response = self.send_request_receive_response(&request).await?;
+        let response = Response::from(response);
 
         let formatted = self.response_manager.format_response(&response);
         Ok(formatted)
     }
 
-    pub async fn send_request_receive_response(&mut self, request: &Request) -> Result<Response> {
+    pub async fn send_request_receive_response(
+        &mut self,
+        request: &FenrisCommand,
+    ) -> Result<FenrisOutput> {
         let channel = self.channel.as_mut().ok_or(FenrisError::ConnectionClosed)?;
 
         channel.send_msg(request).await?;
         debug!("Request sent, awaiting response...");
-        channel.recv_msg::<Response>().await
+        channel.recv_msg::<FenrisOutput>().await
     }
 
     pub fn set_server_info(&mut self, server_info: ServerInfo) -> Result<()> {
