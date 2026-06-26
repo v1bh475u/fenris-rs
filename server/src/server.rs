@@ -1,4 +1,4 @@
-use common::{FenrisError, FileOperations, Result};
+use common::{FenrisError, Result, StorageBackend};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,19 +12,19 @@ use crate::config::ServerConfig;
 use crate::connection::Connection;
 use crate::request_handler::RequestHandler;
 
-pub struct Server {
+pub struct Server<B: StorageBackend> {
     listener: TcpListener,
-    handler: Arc<RequestHandler>,
+    handler: Arc<RequestHandler<B>>,
     config: Arc<ServerConfig>,
     shutdown: CancellationToken,
     connection_limiter: Arc<Semaphore>,
     next_id: Arc<AtomicU64>,
 }
 
-impl Server {
+impl<B: StorageBackend> Server<B> {
     pub async fn bind(
         addr: &str,
-        file_ops: Arc<dyn FileOperations>,
+        storage: Arc<B>,
         config: ServerConfig,
     ) -> Result<(Self, ServerHandle)> {
         let listener = TcpListener::bind(addr)
@@ -37,7 +37,7 @@ impl Server {
 
         let server = Self {
             listener,
-            handler: Arc::new(RequestHandler::new(file_ops)),
+            handler: Arc::new(RequestHandler::new(storage)),
             config,
             shutdown: shutdown.clone(),
             connection_limiter,

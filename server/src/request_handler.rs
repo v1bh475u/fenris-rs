@@ -1,15 +1,15 @@
-use common::{FenrisCommand, FenrisError, FenrisMetadata, FenrisOutput, FileOperations, Result};
+use common::{FenrisCommand, FenrisError, FenrisOutput, Result, StorageBackend};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
 
-pub struct RequestHandler {
-    file_ops: Arc<dyn FileOperations>,
+pub struct RequestHandler<B: StorageBackend> {
+    storage: Arc<B>,
 }
 
-impl RequestHandler {
-    pub fn new(file_ops: Arc<dyn FileOperations>) -> Self {
-        Self { file_ops }
+impl<B: StorageBackend> RequestHandler<B> {
+    pub fn new(storage: Arc<B>) -> Self {
+        Self { storage }
     }
 
     fn resolve_path(&self, path: &Path, current_dir: &Path) -> PathBuf {
@@ -86,7 +86,7 @@ impl RequestHandler {
 
     async fn handle_create_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.create_file(&path).await?;
+        self.storage.put_object(&path, b"").await?;
 
         Ok(FenrisOutput::Success {
             message: format!("File created: {}", path.to_string_lossy()),
@@ -95,7 +95,7 @@ impl RequestHandler {
 
     async fn handle_read_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        let data = self.file_ops.read_file(&path).await?;
+        let data = self.storage.get_object(&path).await?;
 
         Ok(FenrisOutput::ObjectContent { data })
     }
@@ -107,7 +107,7 @@ impl RequestHandler {
         current_dir: &Path,
     ) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.write_file(&path, data).await?;
+        self.storage.put_object(&path, data).await?;
 
         Ok(FenrisOutput::Success {
             message: format!("File written: {} bytes", data.len()),
@@ -121,7 +121,7 @@ impl RequestHandler {
         current_dir: &Path,
     ) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.append_file(&path, data).await?;
+        self.storage.append_object(&path, data).await?;
 
         Ok(FenrisOutput::Success {
             message: format!(
@@ -134,7 +134,7 @@ impl RequestHandler {
 
     async fn handle_delete_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.delete_file(&path).await?;
+        self.storage.delete_object(&path).await?;
 
         Ok(FenrisOutput::Success {
             message: format!("File deleted: {}", path.to_string_lossy()),
@@ -148,7 +148,7 @@ impl RequestHandler {
         current_dir: &Path,
     ) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.write_file(&path, data).await?;
+        self.storage.put_object(&path, data).await?;
 
         Ok(FenrisOutput::Success {
             message: format!(
@@ -161,11 +161,9 @@ impl RequestHandler {
 
     async fn handle_object_info(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        let metadata = self.file_ops.file_info(&path).await?;
+        let metadata = self.storage.metadata(&path).await?;
 
-        Ok(FenrisOutput::ObjectInfo {
-            metadata: metadata.into(),
-        })
+        Ok(FenrisOutput::ObjectInfo { metadata })
     }
 
     async fn handle_create_namespace(
@@ -174,7 +172,7 @@ impl RequestHandler {
         current_dir: &Path,
     ) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.create_dir(&path).await?;
+        self.storage.create_namespace(&path).await?;
 
         Ok(FenrisOutput::Success {
             message: format!("Directory created: {}", path.to_string_lossy()),
@@ -183,13 +181,7 @@ impl RequestHandler {
 
     async fn handle_list_namespace(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        let entries = self
-            .file_ops
-            .list_dir(&path)
-            .await?
-            .into_iter()
-            .map(FenrisMetadata::from)
-            .collect();
+        let entries = self.storage.list_namespace(&path).await?;
 
         Ok(FenrisOutput::NamespaceListing { entries })
     }
@@ -200,7 +192,7 @@ impl RequestHandler {
         current_dir: &Path,
     ) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
-        self.file_ops.delete_dir(&path).await?;
+        self.storage.delete_namespace(&path).await?;
 
         Ok(FenrisOutput::Success {
             message: format!("Directory deleted: {}", path.to_string_lossy()),
@@ -227,7 +219,7 @@ impl RequestHandler {
             current_dir.join(path)
         };
 
-        if !self.file_ops.is_dir(&target_path).await {
+        if !self.storage.is_namespace(&target_path).await {
             return Err(FenrisError::FileOperationError(
                 "Not a directory".to_string(),
             ));
@@ -242,17 +234,17 @@ impl RequestHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::FileMetadata;
+    use common::FenrisMetadata;
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
     #[derive(Default)]
-    struct MockFileOps {
+    struct MockStorage {
         files: Mutex<HashMap<PathBuf, Vec<u8>>>,
         dirs: Mutex<HashSet<PathBuf>>,
     }
 
-    impl MockFileOps {
+    impl MockStorage {
         fn new() -> Self {
             let mut dirs = HashSet::new();
             dirs.insert(PathBuf::from("/"));
@@ -261,17 +253,33 @@ mod tests {
                 dirs: Mutex::new(dirs),
             }
         }
+
+        fn metadata_for(path: &Path, size: u64, is_namespace: bool) -> FenrisMetadata {
+            FenrisMetadata {
+                name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                size,
+                is_namespace,
+                modified_time: 0,
+                permissions: if is_namespace { 0o755 } else { 0o644 },
+            }
+        }
     }
 
     #[async_trait::async_trait]
-    impl FileOperations for MockFileOps {
-        async fn create_file(&self, path: &Path) -> Result<()> {
-            let mut files = self.files.lock().unwrap();
-            files.insert(path.to_path_buf(), Vec::new());
+    impl StorageBackend for MockStorage {
+        async fn put_object(&self, path: &Path, data: &[u8]) -> Result<()> {
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), data.to_vec());
             Ok(())
         }
 
-        async fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        async fn get_object(&self, path: &Path) -> Result<Vec<u8>> {
             let files = self.files.lock().unwrap();
             files
                 .get(path)
@@ -279,23 +287,16 @@ mod tests {
                 .ok_or_else(|| FenrisError::FileOperationError("File not found".into()))
         }
 
-        async fn write_file(&self, path: &Path, data: &[u8]) -> Result<()> {
+        async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()> {
             let mut files = self.files.lock().unwrap();
-            files.insert(path.to_path_buf(), data.to_vec());
+            files
+                .entry(path.to_path_buf())
+                .or_default()
+                .extend_from_slice(data);
             Ok(())
         }
 
-        async fn append_file(&self, path: &Path, data: &[u8]) -> Result<()> {
-            let mut files = self.files.lock().unwrap();
-            if let Some(file_data) = files.get_mut(path) {
-                file_data.extend_from_slice(data);
-                Ok(())
-            } else {
-                Err(FenrisError::FileOperationError("File not found".into()))
-            }
-        }
-
-        async fn delete_file(&self, path: &Path) -> Result<()> {
+        async fn delete_object(&self, path: &Path) -> Result<()> {
             let mut files = self.files.lock().unwrap();
             if files.remove(path).is_some() {
                 Ok(())
@@ -304,85 +305,47 @@ mod tests {
             }
         }
 
-        async fn file_info(&self, path: &Path) -> Result<FileMetadata> {
+        async fn metadata(&self, path: &Path) -> Result<FenrisMetadata> {
             let files = self.files.lock().unwrap();
             if let Some(data) = files.get(path) {
-                return Ok(FileMetadata {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                    size: data.len() as u64,
-                    is_directory: false,
-                    modified_time: 0,
-                    permissions: 0o644,
-                });
+                return Ok(Self::metadata_for(path, data.len() as u64, false));
             }
+            drop(files);
 
             let dirs = self.dirs.lock().unwrap();
             if dirs.contains(path) {
-                return Ok(FileMetadata {
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                    size: 0,
-                    is_directory: true,
-                    modified_time: 0,
-                    permissions: 0o755,
-                });
+                return Ok(Self::metadata_for(path, 0, true));
             }
 
             Err(FenrisError::FileOperationError("NotFound".into()))
         }
 
-        async fn create_dir(&self, path: &Path) -> Result<()> {
+        async fn create_namespace(&self, path: &Path) -> Result<()> {
             self.dirs.lock().unwrap().insert(path.to_path_buf());
             Ok(())
         }
 
-        async fn list_dir(&self, path: &Path) -> Result<Vec<FileMetadata>> {
+        async fn list_namespace(&self, path: &Path) -> Result<Vec<FenrisMetadata>> {
             let mut entries = Vec::new();
             let dirs = self.dirs.lock().unwrap();
             for dir in dirs.iter() {
                 if dir.parent() == Some(path) {
-                    entries.push(FileMetadata {
-                        name: dir
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
-                        size: 0,
-                        is_directory: true,
-                        modified_time: 0,
-                        permissions: 0o755,
-                    });
+                    entries.push(Self::metadata_for(dir, 0, true));
                 }
             }
+            drop(dirs);
 
             let files = self.files.lock().unwrap();
             for (file, data) in files.iter() {
                 if file.parent() == Some(path) {
-                    entries.push(FileMetadata {
-                        name: file
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
-                        size: data.len() as u64,
-                        is_directory: false,
-                        modified_time: 0,
-                        permissions: 0o644,
-                    });
+                    entries.push(Self::metadata_for(file, data.len() as u64, false));
                 }
             }
 
             Ok(entries)
         }
 
-        async fn delete_dir(&self, path: &Path) -> Result<()> {
+        async fn delete_namespace(&self, path: &Path) -> Result<()> {
             if self.dirs.lock().unwrap().remove(path) {
                 Ok(())
             } else {
@@ -395,19 +358,19 @@ mod tests {
                 || self.dirs.lock().unwrap().contains(path)
         }
 
-        async fn is_dir(&self, path: &Path) -> bool {
+        async fn is_namespace(&self, path: &Path) -> bool {
             self.dirs.lock().unwrap().contains(path)
         }
 
-        async fn is_file(&self, path: &Path) -> bool {
+        async fn is_object(&self, path: &Path) -> bool {
             self.files.lock().unwrap().contains_key(path)
         }
     }
 
-    fn create_handler() -> (RequestHandler, Arc<MockFileOps>) {
-        let file_ops = Arc::new(MockFileOps::new());
-        let handler = RequestHandler::new(file_ops.clone());
-        (handler, file_ops)
+    fn create_handler() -> (RequestHandler<MockStorage>, Arc<MockStorage>) {
+        let storage = Arc::new(MockStorage::new());
+        let handler = RequestHandler::new(storage.clone());
+        (handler, storage)
     }
 
     #[tokio::test]
@@ -426,7 +389,7 @@ mod tests {
     async fn test_create_file() {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/home");
-        ops.create_dir(&current_dir).await.unwrap();
+        ops.create_namespace(&current_dir).await.unwrap();
 
         let output = handler
             .process_command(
@@ -480,7 +443,7 @@ mod tests {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
 
-        ops.write_file(Path::new("/log.txt"), b"Init")
+        ops.put_object(Path::new("/log.txt"), b"Init")
             .await
             .unwrap();
 
@@ -497,8 +460,30 @@ mod tests {
 
         assert!(matches!(output, FenrisOutput::Success { .. }));
 
-        let content = ops.read_file(Path::new("/log.txt")).await.unwrap();
+        let content = ops.get_object(Path::new("/log.txt")).await.unwrap();
         assert_eq!(content, b"Init - More");
+    }
+
+    #[tokio::test]
+    async fn test_append_file_uses_storage_create_semantics() {
+        let (handler, ops) = create_handler();
+        let mut current_dir = PathBuf::from("/");
+
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::AppendObject {
+                    path: PathBuf::from("created.log"),
+                    data: b"Created by append".to_vec(),
+                },
+                &mut current_dir,
+            )
+            .await;
+
+        assert!(matches!(output, FenrisOutput::Success { .. }));
+
+        let content = ops.get_object(Path::new("/created.log")).await.unwrap();
+        assert_eq!(content, b"Created by append");
     }
 
     #[tokio::test]
@@ -506,7 +491,7 @@ mod tests {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
 
-        ops.create_file(Path::new("/temp.txt")).await.unwrap();
+        ops.put_object(Path::new("/temp.txt"), b"").await.unwrap();
 
         let output = handler
             .process_command(
@@ -527,7 +512,7 @@ mod tests {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
 
-        ops.create_dir(Path::new("/data")).await.unwrap();
+        ops.create_namespace(Path::new("/data")).await.unwrap();
 
         let output = handler
             .process_command(
@@ -581,9 +566,11 @@ mod tests {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
 
-        ops.create_dir(Path::new("/data")).await.unwrap();
-        ops.create_file(Path::new("/data/f1.txt")).await.unwrap();
-        ops.create_dir(Path::new("/data/sub")).await.unwrap();
+        ops.create_namespace(Path::new("/data")).await.unwrap();
+        ops.put_object(Path::new("/data/f1.txt"), b"")
+            .await
+            .unwrap();
+        ops.create_namespace(Path::new("/data/sub")).await.unwrap();
 
         let output = handler
             .process_command(
@@ -620,7 +607,7 @@ mod tests {
             )
             .await;
         assert!(matches!(output, FenrisOutput::Success { .. }));
-        assert!(ops.is_dir(Path::new("/newdir")).await);
+        assert!(ops.is_namespace(Path::new("/newdir")).await);
 
         let output = handler
             .process_command(
@@ -632,14 +619,14 @@ mod tests {
             )
             .await;
         assert!(matches!(output, FenrisOutput::Success { .. }));
-        assert!(!ops.is_dir(Path::new("/newdir")).await);
+        assert!(!ops.is_namespace(Path::new("/newdir")).await);
     }
 
     #[tokio::test]
     async fn test_file_info() {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
-        ops.create_file(Path::new("/info.txt")).await.unwrap();
+        ops.put_object(Path::new("/info.txt"), b"").await.unwrap();
 
         let output = handler
             .process_command(
@@ -677,7 +664,7 @@ mod tests {
             .await;
         assert!(matches!(output, FenrisOutput::Success { .. }));
 
-        let file_data = ops.read_file(Path::new("/upload.dat")).await.unwrap();
+        let file_data = ops.get_object(Path::new("/upload.dat")).await.unwrap();
         assert_eq!(file_data, data);
     }
 
