@@ -100,7 +100,7 @@ impl DefaultFileOperations {
         Ok(Self { base_dir })
     }
 
-    fn resolve_path(&self, path: &Path) -> Result<PathBuf> {
+    pub(crate) fn resolve_path(&self, path: &Path) -> Result<PathBuf> {
         let path = path.strip_prefix("/").unwrap_or(path);
 
         let full_path = self.base_dir.join(path);
