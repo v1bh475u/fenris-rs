@@ -1,6 +1,7 @@
 pub mod compression;
 pub mod config;
 pub mod crypto;
+pub mod domain;
 pub mod error;
 pub mod file_ops;
 pub mod framing;
@@ -15,6 +16,7 @@ pub use config::{
     ProtocolCodecOf, ProtocolConfig, SecureChannelConfig, Zlib, ZlibWithLevel,
 };
 pub use crypto::{CryptoManager, IV_SIZE, KEY_SIZE, TAG_SIZE};
+pub use domain::{FenrisCommand, FenrisMetadata, FenrisOutput};
 pub use error::{FenrisError, Result};
 pub use file_ops::{DefaultFileOperations, FileMetadata, FileOperations};
 pub use framing::{DEFAULT_MAX_FRAME_SIZE, FrameLimits, LengthPrefixedFrame};
