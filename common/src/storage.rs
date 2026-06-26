@@ -145,6 +145,9 @@ impl MemoryStorage {
             match component {
                 Component::RootDir | Component::CurDir => {}
                 Component::Normal(name) => normalized.push(name),
+                Component::ParentDir if normalized != Path::new("/") => {
+                    normalized.pop();
+                }
                 Component::ParentDir | Component::Prefix(_) => {
                     return Err(FenrisError::FileOperationError(
                         "Path outside storage root".to_string(),
@@ -616,6 +619,24 @@ mod tests {
             .unwrap();
 
         let data = storage.get_object(Path::new("/data.txt")).await.unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn memory_storage_resolves_parent_components_inside_root() {
+        let storage = MemoryStorage::new();
+
+        storage.create_namespace(Path::new("docs")).await.unwrap();
+        storage
+            .put_object(Path::new("docs/nested.txt"), b"hello")
+            .await
+            .unwrap();
+
+        let data = storage
+            .get_object(Path::new("docs/subdir/../nested.txt"))
+            .await
+            .unwrap();
+
         assert_eq!(data, b"hello");
     }
 
