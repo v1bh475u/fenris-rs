@@ -269,3 +269,322 @@ fn response(
         details,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProtocolCodec, ProtobufCodec};
+
+    #[test]
+    fn protobuf_request_decodes_into_domain_commands() {
+        let cases = [
+            (
+                request(RequestType::Ping, PathBuf::new(), Vec::new()),
+                FenrisCommand::Ping,
+            ),
+            (
+                request(RequestType::CreateFile, PathBuf::from("a.txt"), Vec::new()),
+                FenrisCommand::CreateObject {
+                    path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                request(RequestType::ReadFile, PathBuf::from("a.txt"), Vec::new()),
+                FenrisCommand::ReadObject {
+                    path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                request(RequestType::WriteFile, PathBuf::from("a.txt"), b"data".to_vec()),
+                FenrisCommand::WriteObject {
+                    path: PathBuf::from("a.txt"),
+                    data: b"data".to_vec(),
+                },
+            ),
+            (
+                request(
+                    RequestType::AppendFile,
+                    PathBuf::from("a.txt"),
+                    b"more".to_vec(),
+                ),
+                FenrisCommand::AppendObject {
+                    path: PathBuf::from("a.txt"),
+                    data: b"more".to_vec(),
+                },
+            ),
+            (
+                request(RequestType::DeleteFile, PathBuf::from("a.txt"), Vec::new()),
+                FenrisCommand::DeleteObject {
+                    path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                request(RequestType::InfoFile, PathBuf::from("a.txt"), Vec::new()),
+                FenrisCommand::ObjectInfo {
+                    path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                request(RequestType::CreateDir, PathBuf::from("dir"), Vec::new()),
+                FenrisCommand::CreateNamespace {
+                    path: PathBuf::from("dir"),
+                },
+            ),
+            (
+                request(RequestType::ListDir, PathBuf::from("dir"), Vec::new()),
+                FenrisCommand::ListNamespace {
+                    path: PathBuf::from("dir"),
+                },
+            ),
+            (
+                request(RequestType::ChangeDir, PathBuf::from("dir"), Vec::new()),
+                FenrisCommand::ChangeNamespace {
+                    path: PathBuf::from("dir"),
+                },
+            ),
+            (
+                request(RequestType::DeleteDir, PathBuf::from("dir"), Vec::new()),
+                FenrisCommand::DeleteNamespace {
+                    path: PathBuf::from("dir"),
+                },
+            ),
+            (
+                request(
+                    RequestType::UploadFile,
+                    PathBuf::from("a.txt"),
+                    b"upload".to_vec(),
+                ),
+                FenrisCommand::UploadObject {
+                    path: PathBuf::from("a.txt"),
+                    data: b"upload".to_vec(),
+                },
+            ),
+            (
+                request(RequestType::Terminate, PathBuf::new(), Vec::new()),
+                FenrisCommand::Terminate,
+            ),
+        ];
+
+        for (request, expected) in cases {
+            assert_eq!(FenrisCommand::try_from(request).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn domain_commands_encode_into_expected_protobuf_requests() {
+        let cases = [
+            (
+                FenrisCommand::Ping,
+                (RequestType::Ping, String::new(), Vec::new()),
+            ),
+            (
+                FenrisCommand::CreateObject {
+                    path: PathBuf::from("a.txt"),
+                },
+                (RequestType::CreateFile, "a.txt".to_string(), Vec::new()),
+            ),
+            (
+                FenrisCommand::WriteObject {
+                    path: PathBuf::from("a.txt"),
+                    data: b"data".to_vec(),
+                },
+                (RequestType::WriteFile, "a.txt".to_string(), b"data".to_vec()),
+            ),
+            (
+                FenrisCommand::Terminate,
+                (RequestType::Terminate, String::new(), Vec::new()),
+            ),
+        ];
+
+        for (command, (request_type, filename, data)) in cases {
+            let request = Request::from(command);
+            assert_eq!(request.command, request_type as i32);
+            assert_eq!(request.filename, filename);
+            assert_eq!(request.data, data);
+        }
+    }
+
+    #[test]
+    fn protobuf_response_decodes_into_domain_outputs() {
+        let metadata = FenrisMetadata {
+            name: "a.txt".to_string(),
+            size: 4,
+            is_namespace: false,
+            modified_time: 5,
+            permissions: 0o644,
+        };
+
+        let cases = [
+            (
+                response(ResponseType::Pong, true, String::new(), vec![], None),
+                FenrisOutput::Pong,
+            ),
+            (
+                response(
+                    ResponseType::Success,
+                    true,
+                    String::new(),
+                    b"ok".to_vec(),
+                    None,
+                ),
+                FenrisOutput::Success {
+                    message: "ok".to_string(),
+                },
+            ),
+            (
+                response(
+                    ResponseType::FileContent,
+                    true,
+                    String::new(),
+                    b"body".to_vec(),
+                    None,
+                ),
+                FenrisOutput::ObjectContent {
+                    data: b"body".to_vec(),
+                },
+            ),
+            (
+                response(
+                    ResponseType::FileInfo,
+                    true,
+                    String::new(),
+                    vec![],
+                    Some(response::Details::FileInfo(metadata.clone().into())),
+                ),
+                FenrisOutput::ObjectInfo {
+                    metadata: metadata.clone(),
+                },
+            ),
+            (
+                response(
+                    ResponseType::DirListing,
+                    true,
+                    String::new(),
+                    vec![],
+                    Some(response::Details::DirectoryListing(DirectoryListing {
+                        entries: vec![metadata.clone().into()],
+                    })),
+                ),
+                FenrisOutput::NamespaceListing {
+                    entries: vec![metadata],
+                },
+            ),
+            (
+                response(
+                    ResponseType::ChangedDir,
+                    true,
+                    String::new(),
+                    b"/tmp".to_vec(),
+                    None,
+                ),
+                FenrisOutput::NamespaceChanged {
+                    path: PathBuf::from("/tmp"),
+                },
+            ),
+            (
+                response(ResponseType::Terminated, true, String::new(), vec![], None),
+                FenrisOutput::Terminated,
+            ),
+            (
+                response(
+                    ResponseType::Error,
+                    false,
+                    "nope".to_string(),
+                    vec![],
+                    None,
+                ),
+                FenrisOutput::Error {
+                    message: "nope".to_string(),
+                },
+            ),
+        ];
+
+        for (response, expected) in cases {
+            assert_eq!(FenrisOutput::try_from(response).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn domain_outputs_encode_into_expected_protobuf_responses() {
+        let metadata = FenrisMetadata {
+            name: "dir".to_string(),
+            size: 0,
+            is_namespace: true,
+            modified_time: 7,
+            permissions: 0o755,
+        };
+
+        let output = FenrisOutput::NamespaceListing {
+            entries: vec![metadata.clone()],
+        };
+        let response = Response::from(output);
+        assert_eq!(response.r#type, ResponseType::DirListing as i32);
+        assert!(response.success);
+        assert!(matches!(
+            response.details,
+            Some(response::Details::DirectoryListing(_))
+        ));
+
+        let response = Response::from(FenrisOutput::Error {
+            message: "bad".to_string(),
+        });
+        assert_eq!(response.r#type, ResponseType::Error as i32);
+        assert!(!response.success);
+        assert_eq!(response.error_message, "bad");
+
+        let response = Response::from(FenrisOutput::ObjectInfo { metadata });
+        assert_eq!(response.r#type, ResponseType::FileInfo as i32);
+        assert!(matches!(response.details, Some(response::Details::FileInfo(_))));
+    }
+
+    #[test]
+    fn protobuf_codec_round_trips_domain_command() {
+        let command = FenrisCommand::WriteObject {
+            path: PathBuf::from("a.txt"),
+            data: b"payload".to_vec(),
+        };
+
+        let encoded = ProtobufCodec::encode(&command).unwrap();
+        let decoded: FenrisCommand = ProtobufCodec::decode(&encoded).unwrap();
+
+        assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn protobuf_codec_round_trips_domain_output() {
+        let output = FenrisOutput::NamespaceChanged {
+            path: PathBuf::from("/data"),
+        };
+
+        let encoded = ProtobufCodec::encode(&output).unwrap();
+        let decoded: FenrisOutput = ProtobufCodec::decode(&encoded).unwrap();
+
+        assert_eq!(decoded, output);
+    }
+
+    #[test]
+    fn invalid_request_and_response_types_are_rejected() {
+        let request = Request {
+            command: 99,
+            filename: String::new(),
+            ip_addr: 0,
+            data: vec![],
+        };
+        assert!(matches!(
+            FenrisCommand::try_from(request),
+            Err(FenrisError::InvalidProtocolMessage)
+        ));
+
+        let response = Response {
+            r#type: 99,
+            success: true,
+            error_message: String::new(),
+            data: vec![],
+            details: None,
+        };
+        assert!(matches!(
+            FenrisOutput::try_from(response),
+            Err(FenrisError::InvalidProtocolMessage)
+        ));
+    }
+}
