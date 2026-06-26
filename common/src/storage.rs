@@ -99,3 +99,188 @@ impl StorageBackend for TokioFsStorage {
         self.file_ops.is_file(path).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FenrisError;
+    use tempfile::TempDir;
+
+    fn storage(temp_dir: &TempDir) -> TokioFsStorage {
+        TokioFsStorage::new(temp_dir.path().to_path_buf())
+    }
+
+    #[tokio::test]
+    async fn put_and_get_object_round_trip() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("data.txt"), b"hello")
+            .await
+            .unwrap();
+        let data = storage.get_object(Path::new("data.txt")).await.unwrap();
+
+        assert_eq!(data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn put_object_overwrites_existing_object() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("data.txt"), b"first")
+            .await
+            .unwrap();
+        storage
+            .put_object(Path::new("data.txt"), b"second")
+            .await
+            .unwrap();
+
+        let data = storage.get_object(Path::new("data.txt")).await.unwrap();
+        assert_eq!(data, b"second");
+    }
+
+    #[tokio::test]
+    async fn append_object_extends_existing_object() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("log.txt"), b"first")
+            .await
+            .unwrap();
+        storage
+            .append_object(Path::new("log.txt"), b" second")
+            .await
+            .unwrap();
+
+        let data = storage.get_object(Path::new("log.txt")).await.unwrap();
+        assert_eq!(data, b"first second");
+    }
+
+    #[tokio::test]
+    async fn append_object_creates_missing_object_when_parent_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .create_namespace(Path::new("logs"))
+            .await
+            .unwrap();
+        storage
+            .append_object(Path::new("logs/today.txt"), b"entry")
+            .await
+            .unwrap();
+
+        let data = storage
+            .get_object(Path::new("logs/today.txt"))
+            .await
+            .unwrap();
+        assert_eq!(data, b"entry");
+    }
+
+    #[tokio::test]
+    async fn delete_object_removes_object() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("data.txt"), b"hello")
+            .await
+            .unwrap();
+        assert!(storage.exists(Path::new("data.txt")).await);
+
+        storage.delete_object(Path::new("data.txt")).await.unwrap();
+
+        assert!(!storage.exists(Path::new("data.txt")).await);
+    }
+
+    #[tokio::test]
+    async fn metadata_reports_object_and_namespace_shape() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("data.txt"), b"hello")
+            .await
+            .unwrap();
+        storage
+            .create_namespace(Path::new("docs"))
+            .await
+            .unwrap();
+
+        let object = storage.metadata(Path::new("data.txt")).await.unwrap();
+        assert_eq!(object.name, "data.txt");
+        assert_eq!(object.size, 5);
+        assert!(!object.is_namespace);
+
+        let namespace = storage.metadata(Path::new("docs")).await.unwrap();
+        assert_eq!(namespace.name, "docs");
+        assert!(namespace.is_namespace);
+    }
+
+    #[tokio::test]
+    async fn namespace_create_list_and_delete() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .create_namespace(Path::new("docs"))
+            .await
+            .unwrap();
+        storage
+            .put_object(Path::new("docs/a.txt"), b"a")
+            .await
+            .unwrap();
+        storage
+            .create_namespace(Path::new("docs/nested"))
+            .await
+            .unwrap();
+
+        let entries = storage.list_namespace(Path::new("docs")).await.unwrap();
+        let names: Vec<String> = entries.into_iter().map(|entry| entry.name).collect();
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.contains(&"nested".to_string()));
+
+        storage
+            .delete_namespace(Path::new("docs/nested"))
+            .await
+            .unwrap();
+        assert!(!storage.exists(Path::new("docs/nested")).await);
+    }
+
+    #[tokio::test]
+    async fn existence_and_kind_checks_reflect_storage_state() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        storage
+            .put_object(Path::new("data.txt"), b"hello")
+            .await
+            .unwrap();
+        storage
+            .create_namespace(Path::new("docs"))
+            .await
+            .unwrap();
+
+        assert!(storage.exists(Path::new("data.txt")).await);
+        assert!(storage.is_object(Path::new("data.txt")).await);
+        assert!(!storage.is_namespace(Path::new("data.txt")).await);
+
+        assert!(storage.exists(Path::new("docs")).await);
+        assert!(storage.is_namespace(Path::new("docs")).await);
+        assert!(!storage.is_object(Path::new("docs")).await);
+    }
+
+    #[tokio::test]
+    async fn path_traversal_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = storage(&temp_dir);
+
+        let result = storage.get_object(Path::new("../../../etc/passwd")).await;
+
+        assert!(matches!(result, Err(FenrisError::FileOperationError(_))));
+    }
+}
