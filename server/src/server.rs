@@ -1,4 +1,4 @@
-use common::{FenrisError, Result, StorageBackend};
+use common::{FenrisError, Result, ServerIdentityKey, StorageBackend};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +19,7 @@ pub struct Server<B: StorageBackend> {
     shutdown: CancellationToken,
     connection_limiter: Arc<Semaphore>,
     next_id: Arc<AtomicU64>,
+    identity_key: Option<Arc<ServerIdentityKey>>,
 }
 
 impl<B: StorageBackend> Server<B> {
@@ -26,6 +27,24 @@ impl<B: StorageBackend> Server<B> {
         addr: &str,
         storage: Arc<B>,
         config: ServerConfig,
+    ) -> Result<(Self, ServerHandle)> {
+        Self::bind_with_identity(addr, storage, config, None).await
+    }
+
+    pub async fn bind_authenticated(
+        addr: &str,
+        storage: Arc<B>,
+        identity_key: Arc<ServerIdentityKey>,
+        config: ServerConfig,
+    ) -> Result<(Self, ServerHandle)> {
+        Self::bind_with_identity(addr, storage, config, Some(identity_key)).await
+    }
+
+    async fn bind_with_identity(
+        addr: &str,
+        storage: Arc<B>,
+        config: ServerConfig,
+        identity_key: Option<Arc<ServerIdentityKey>>,
     ) -> Result<(Self, ServerHandle)> {
         let listener = TcpListener::bind(addr)
             .await
@@ -42,6 +61,7 @@ impl<B: StorageBackend> Server<B> {
             shutdown: shutdown.clone(),
             connection_limiter,
             next_id: Arc::new(AtomicU64::new(1)),
+            identity_key,
         };
 
         let handle = ServerHandle {
@@ -118,12 +138,18 @@ impl<B: StorageBackend> Server<B> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let handler = Arc::clone(&self.handler);
         let config = Arc::clone(&self.config);
+        let identity_key = self.identity_key.clone();
         let shutdown = self.shutdown.clone();
 
         tasks.spawn(async move {
             let _permit = permit;
 
-            let connection = Connection::accept(id, stream, addr, handler, config).await?;
+            let connection = if let Some(identity_key) = identity_key {
+                Connection::accept_authenticated(id, stream, addr, handler, config, identity_key)
+                    .await?
+            } else {
+                Connection::accept(id, stream, addr, handler, config).await?
+            };
             connection.run(shutdown).await
         });
     }
