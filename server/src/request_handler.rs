@@ -1,4 +1,4 @@
-use common::{FenrisCommand, FenrisMetadata, FenrisOutput, FenrisError, FileOperations, Result};
+use common::{FenrisCommand, FenrisError, FenrisMetadata, FenrisOutput, FileOperations, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -181,11 +181,7 @@ impl RequestHandler {
         })
     }
 
-    async fn handle_list_namespace(
-        &self,
-        path: &Path,
-        current_dir: &Path,
-    ) -> Result<FenrisOutput> {
+    async fn handle_list_namespace(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
         let entries = self
             .file_ops

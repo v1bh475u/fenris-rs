@@ -86,7 +86,9 @@ impl From<FenrisCommand> for Request {
                 request(RequestType::CreateFile, path, Vec::new())
             }
             FenrisCommand::ReadObject { path } => request(RequestType::ReadFile, path, Vec::new()),
-            FenrisCommand::WriteObject { path, data } => request(RequestType::WriteFile, path, data),
+            FenrisCommand::WriteObject { path, data } => {
+                request(RequestType::WriteFile, path, data)
+            }
             FenrisCommand::AppendObject { path, data } => {
                 request(RequestType::AppendFile, path, data)
             }
@@ -151,7 +153,11 @@ impl TryFrom<Response> for FenrisOutput {
             }),
             ResponseType::DirListing => match response.details {
                 Some(response::Details::DirectoryListing(listing)) => Ok(Self::NamespaceListing {
-                    entries: listing.entries.into_iter().map(FenrisMetadata::from).collect(),
+                    entries: listing
+                        .entries
+                        .into_iter()
+                        .map(FenrisMetadata::from)
+                        .collect(),
                 }),
                 _ => Err(FenrisError::SerializationError(
                     "missing directory listing".to_string(),
@@ -273,7 +279,7 @@ fn response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ProtocolCodec, ProtobufCodec};
+    use crate::{ProtobufCodec, ProtocolCodec};
 
     #[test]
     fn protobuf_request_decodes_into_domain_commands() {
@@ -295,7 +301,11 @@ mod tests {
                 },
             ),
             (
-                request(RequestType::WriteFile, PathBuf::from("a.txt"), b"data".to_vec()),
+                request(
+                    RequestType::WriteFile,
+                    PathBuf::from("a.txt"),
+                    b"data".to_vec(),
+                ),
                 FenrisCommand::WriteObject {
                     path: PathBuf::from("a.txt"),
                     data: b"data".to_vec(),
@@ -388,7 +398,11 @@ mod tests {
                     path: PathBuf::from("a.txt"),
                     data: b"data".to_vec(),
                 },
-                (RequestType::WriteFile, "a.txt".to_string(), b"data".to_vec()),
+                (
+                    RequestType::WriteFile,
+                    "a.txt".to_string(),
+                    b"data".to_vec(),
+                ),
             ),
             (
                 FenrisCommand::Terminate,
@@ -486,13 +500,7 @@ mod tests {
                 FenrisOutput::Terminated,
             ),
             (
-                response(
-                    ResponseType::Error,
-                    false,
-                    "nope".to_string(),
-                    vec![],
-                    None,
-                ),
+                response(ResponseType::Error, false, "nope".to_string(), vec![], None),
                 FenrisOutput::Error {
                     message: "nope".to_string(),
                 },
@@ -534,7 +542,10 @@ mod tests {
 
         let response = Response::from(FenrisOutput::ObjectInfo { metadata });
         assert_eq!(response.r#type, ResponseType::FileInfo as i32);
-        assert!(matches!(response.details, Some(response::Details::FileInfo(_))));
+        assert!(matches!(
+            response.details,
+            Some(response::Details::FileInfo(_))
+        ));
     }
 
     #[test]
