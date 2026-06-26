@@ -684,4 +684,34 @@ mod tests {
         let file_data = ops.read_file(Path::new("/upload.dat")).await.unwrap();
         assert_eq!(file_data, data);
     }
+
+    #[tokio::test]
+    async fn test_terminate_command() {
+        let (handler, _) = create_handler();
+        let mut current_dir = PathBuf::from("/");
+
+        let output = handler
+            .process_command(1, &FenrisCommand::Terminate, &mut current_dir)
+            .await;
+
+        assert_eq!(output, FenrisOutput::Terminated);
+    }
+
+    #[tokio::test]
+    async fn test_missing_object_returns_error_output() {
+        let (handler, _) = create_handler();
+        let mut current_dir = PathBuf::from("/");
+
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::ReadObject {
+                    path: PathBuf::from("missing.txt"),
+                },
+                &mut current_dir,
+            )
+            .await;
+
+        assert!(matches!(output, FenrisOutput::Error { .. }));
+    }
 }
