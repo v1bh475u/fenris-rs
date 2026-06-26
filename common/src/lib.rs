@@ -9,6 +9,7 @@ pub mod network;
 pub mod proto;
 pub mod protocol;
 pub mod secure_channel;
+pub mod storage;
 
 pub use compression::{CompressionManager, ZlibCompressor};
 pub use config::{
@@ -26,3 +27,4 @@ pub use network::{
 pub use proto::{Request, RequestType, Response, ResponseType};
 pub use protocol::{ProtobufCodec, ProtocolCodec};
 pub use secure_channel::{DefaultSecureChannel, SecureChannel};
+pub use storage::StorageBackend;
