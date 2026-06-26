@@ -2,12 +2,31 @@ use crate::{DefaultFileOperations, FenrisError, FenrisMetadata, FileOperations, 
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectChunk {
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub is_last: bool,
+    pub total_size: u64,
+}
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + 'static {
     async fn put_object(&self, path: &Path, data: &[u8]) -> Result<()>;
 
     async fn get_object(&self, path: &Path) -> Result<Vec<u8>>;
+
+    async fn get_object_chunk(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_len: usize,
+    ) -> Result<ObjectChunk>;
 
     async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()>;
 
@@ -57,6 +76,15 @@ impl StorageBackend for TokioFsStorage {
 
     async fn get_object(&self, path: &Path) -> Result<Vec<u8>> {
         self.file_ops.read_file(path).await
+    }
+
+    async fn get_object_chunk(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_len: usize,
+    ) -> Result<ObjectChunk> {
+        read_file_chunk(&self.file_ops.resolve_path(path)?, offset, max_len).await
     }
 
     async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()> {
@@ -229,6 +257,46 @@ impl StorageBackend for MemoryStorage {
             .ok_or_else(|| FenrisError::FileOperationError("Object not found".to_string()))
     }
 
+    async fn get_object_chunk(
+        &self,
+        path: &Path,
+        offset: u64,
+        max_len: usize,
+    ) -> Result<ObjectChunk> {
+        if max_len == 0 {
+            return Err(FenrisError::InvalidRequest(
+                "chunk length must be greater than zero".to_string(),
+            ));
+        }
+
+        let path = Self::normalize_path(path)?;
+        let state = self.lock_state()?;
+        let data = state
+            .objects
+            .get(&path)
+            .ok_or_else(|| FenrisError::FileOperationError("Object not found".to_string()))?;
+        let total_size = data.len() as u64;
+
+        if offset >= total_size {
+            return Ok(ObjectChunk {
+                offset,
+                data: Vec::new(),
+                is_last: true,
+                total_size,
+            });
+        }
+
+        let start = offset as usize;
+        let end = data.len().min(start + max_len);
+
+        Ok(ObjectChunk {
+            offset,
+            data: data[start..end].to_vec(),
+            is_last: end == data.len(),
+            total_size,
+        })
+    }
+
     async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()> {
         let path = Self::normalize_path(path)?;
         let mut state = self.lock_state()?;
@@ -385,6 +453,51 @@ impl StorageBackend for MemoryStorage {
     }
 }
 
+async fn read_file_chunk(path: &Path, offset: u64, max_len: usize) -> Result<ObjectChunk> {
+    if max_len == 0 {
+        return Err(FenrisError::InvalidRequest(
+            "chunk length must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut file = File::open(path)
+        .await
+        .map_err(|e| FenrisError::FileOperationError(format!("Failed to open file: {}", e)))?;
+    let total_size = file
+        .metadata()
+        .await
+        .map_err(|e| FenrisError::FileOperationError(format!("Failed to get metadata: {}", e)))?
+        .len();
+
+    if offset >= total_size {
+        return Ok(ObjectChunk {
+            offset,
+            data: Vec::new(),
+            is_last: true,
+            total_size,
+        });
+    }
+
+    file.seek(SeekFrom::Start(offset))
+        .await
+        .map_err(|e| FenrisError::FileOperationError(format!("Failed to seek file: {}", e)))?;
+
+    let remaining = (total_size - offset) as usize;
+    let mut data = vec![0; remaining.min(max_len)];
+    let read = file
+        .read(&mut data)
+        .await
+        .map_err(|e| FenrisError::FileOperationError(format!("Failed to read file: {}", e)))?;
+    data.truncate(read);
+
+    Ok(ObjectChunk {
+        offset,
+        is_last: offset + read as u64 >= total_size,
+        data,
+        total_size,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +588,47 @@ mod tests {
         storage.delete_object(Path::new("data.txt")).await.unwrap();
 
         assert!(!storage.exists(Path::new("data.txt")).await);
+    }
+
+    async fn assert_get_object_chunk_handles_ranges<S: StorageBackend>(storage: &S) {
+        storage
+            .put_object(Path::new("data.txt"), b"abcdefghij")
+            .await
+            .unwrap();
+
+        let first = storage
+            .get_object_chunk(Path::new("data.txt"), 0, 4)
+            .await
+            .unwrap();
+        assert_eq!(first.data, b"abcd");
+        assert_eq!(first.offset, 0);
+        assert_eq!(first.total_size, 10);
+        assert!(!first.is_last);
+
+        let middle = storage
+            .get_object_chunk(Path::new("data.txt"), 4, 4)
+            .await
+            .unwrap();
+        assert_eq!(middle.data, b"efgh");
+        assert!(!middle.is_last);
+
+        let final_chunk = storage
+            .get_object_chunk(Path::new("data.txt"), 8, 4)
+            .await
+            .unwrap();
+        assert_eq!(final_chunk.data, b"ij");
+        assert!(final_chunk.is_last);
+
+        let out_of_range = storage
+            .get_object_chunk(Path::new("data.txt"), 99, 4)
+            .await
+            .unwrap();
+        assert!(out_of_range.data.is_empty());
+        assert!(out_of_range.is_last);
+        assert_eq!(out_of_range.total_size, 10);
+
+        let zero_len = storage.get_object_chunk(Path::new("data.txt"), 0, 0).await;
+        assert!(matches!(zero_len, Err(FenrisError::InvalidRequest(_))));
     }
 
     async fn assert_metadata_reports_object_and_namespace_shape<S: StorageBackend>(storage: &S) {
@@ -577,6 +731,12 @@ mod tests {
                 async fn delete_object_removes_object() {
                     let backend = $storage();
                     assert_delete_object_removes_object(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn get_object_chunk_handles_ranges() {
+                    let backend = $storage();
+                    assert_get_object_chunk_handles_ranges(&backend.storage).await;
                 }
 
                 #[tokio::test]

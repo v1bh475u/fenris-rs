@@ -2,23 +2,74 @@ use std::path::PathBuf;
 
 use crate::{
     FenrisError, FileMetadata, Request, RequestType, Response, ResponseType,
-    proto::{DirectoryListing, FileInfo, response},
+    proto::{
+        DirectoryListing, FileInfo, TransferAck, TransferChunk as ProtoTransferChunk, TransferMode,
+        TransferStart, request, response,
+    },
 };
+
+pub const DEFAULT_TRANSFER_CHUNK_SIZE: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectWriteMode {
+    Write,
+    Append,
+    Upload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferChunk {
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub is_last: bool,
+    pub total_size: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FenrisCommand {
     Ping,
-    CreateObject { path: PathBuf },
-    ReadObject { path: PathBuf },
-    WriteObject { path: PathBuf, data: Vec<u8> },
-    AppendObject { path: PathBuf, data: Vec<u8> },
-    DeleteObject { path: PathBuf },
-    UploadObject { path: PathBuf, data: Vec<u8> },
-    ObjectInfo { path: PathBuf },
-    CreateNamespace { path: PathBuf },
-    ListNamespace { path: PathBuf },
-    ChangeNamespace { path: PathBuf },
-    DeleteNamespace { path: PathBuf },
+    CreateObject {
+        path: PathBuf,
+    },
+    ReadObject {
+        path: PathBuf,
+    },
+    WriteObject {
+        path: PathBuf,
+        data: Vec<u8>,
+    },
+    AppendObject {
+        path: PathBuf,
+        data: Vec<u8>,
+    },
+    DeleteObject {
+        path: PathBuf,
+    },
+    UploadObject {
+        path: PathBuf,
+        data: Vec<u8>,
+    },
+    BeginObjectWrite {
+        path: PathBuf,
+        mode: ObjectWriteMode,
+        total_size: u64,
+    },
+    WriteObjectChunk(TransferChunk),
+    ObjectInfo {
+        path: PathBuf,
+    },
+    CreateNamespace {
+        path: PathBuf,
+    },
+    ListNamespace {
+        path: PathBuf,
+    },
+    ChangeNamespace {
+        path: PathBuf,
+    },
+    DeleteNamespace {
+        path: PathBuf,
+    },
     Terminate,
 }
 
@@ -34,13 +85,34 @@ pub struct FenrisMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FenrisOutput {
     Pong,
-    Success { message: String },
-    ObjectContent { data: Vec<u8> },
-    ObjectInfo { metadata: FenrisMetadata },
-    NamespaceListing { entries: Vec<FenrisMetadata> },
-    NamespaceChanged { path: PathBuf },
+    Success {
+        message: String,
+    },
+    ObjectContent {
+        data: Vec<u8>,
+        total_size: u64,
+        truncated: bool,
+    },
+    ObjectContentChunk(TransferChunk),
+    ObjectInfo {
+        metadata: FenrisMetadata,
+    },
+    NamespaceListing {
+        entries: Vec<FenrisMetadata>,
+    },
+    NamespaceChanged {
+        path: PathBuf,
+    },
+    TransferReady {
+        chunk_size: usize,
+    },
+    TransferProgress {
+        offset: u64,
+    },
     Terminated,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl TryFrom<Request> for FenrisCommand {
@@ -73,6 +145,23 @@ impl TryFrom<Request> for FenrisCommand {
                 path,
                 data: request.data,
             }),
+            RequestType::BeginObjectWrite => match request.details {
+                Some(request::Details::TransferStart(start)) => Ok(Self::BeginObjectWrite {
+                    path: PathBuf::from(start.filename),
+                    mode: ObjectWriteMode::try_from(
+                        TransferMode::try_from(start.mode)
+                            .map_err(|_| FenrisError::InvalidProtocolMessage)?,
+                    )?,
+                    total_size: start.total_size,
+                }),
+                _ => Err(FenrisError::InvalidProtocolMessage),
+            },
+            RequestType::WriteObjectChunk => match request.details {
+                Some(request::Details::TransferChunk(chunk)) => {
+                    Ok(Self::WriteObjectChunk(chunk.into()))
+                }
+                _ => Err(FenrisError::InvalidProtocolMessage),
+            },
             RequestType::Terminate => Ok(Self::Terminate),
         }
     }
@@ -98,6 +187,26 @@ impl From<FenrisCommand> for Request {
             FenrisCommand::UploadObject { path, data } => {
                 request(RequestType::UploadFile, path, data)
             }
+            FenrisCommand::BeginObjectWrite {
+                path,
+                mode,
+                total_size,
+            } => request_with_details(
+                RequestType::BeginObjectWrite,
+                path.clone(),
+                Vec::new(),
+                Some(request::Details::TransferStart(TransferStart {
+                    filename: path.to_string_lossy().to_string(),
+                    mode: TransferMode::from(mode) as i32,
+                    total_size,
+                })),
+            ),
+            FenrisCommand::WriteObjectChunk(chunk) => request_with_details(
+                RequestType::WriteObjectChunk,
+                PathBuf::new(),
+                Vec::new(),
+                Some(request::Details::TransferChunk(chunk.into())),
+            ),
             FenrisCommand::ObjectInfo { path } => request(RequestType::InfoFile, path, Vec::new()),
             FenrisCommand::CreateNamespace { path } => {
                 request(RequestType::CreateDir, path, Vec::new())
@@ -117,11 +226,21 @@ impl From<FenrisCommand> for Request {
 }
 
 fn request(command: RequestType, path: PathBuf, data: Vec<u8>) -> Request {
+    request_with_details(command, path, data, None)
+}
+
+fn request_with_details(
+    command: RequestType,
+    path: PathBuf,
+    data: Vec<u8>,
+    details: Option<request::Details>,
+) -> Request {
     Request {
         command: command as i32,
         filename: path.to_string_lossy().to_string(),
         ip_addr: 0,
         data,
+        details,
     }
 }
 
@@ -148,9 +267,14 @@ impl TryFrom<Response> for FenrisOutput {
                     "missing file info".to_string(),
                 )),
             },
-            ResponseType::FileContent => Ok(Self::ObjectContent {
-                data: response.data,
-            }),
+            ResponseType::FileContent => {
+                let total_size = response.data.len() as u64;
+                Ok(Self::ObjectContent {
+                    data: response.data,
+                    total_size,
+                    truncated: false,
+                })
+            }
             ResponseType::DirListing => match response.details {
                 Some(response::Details::DirectoryListing(listing)) => Ok(Self::NamespaceListing {
                     entries: listing
@@ -173,6 +297,30 @@ impl TryFrom<Response> for FenrisOutput {
             ResponseType::ChangedDir => Ok(Self::NamespaceChanged {
                 path: PathBuf::from(String::from_utf8_lossy(&response.data).to_string()),
             }),
+            ResponseType::TransferReady => match response.details {
+                Some(response::Details::TransferAck(ack)) => Ok(Self::TransferReady {
+                    chunk_size: ack.chunk_size as usize,
+                }),
+                _ => Err(FenrisError::SerializationError(
+                    "missing transfer ack".to_string(),
+                )),
+            },
+            ResponseType::TransferProgress => match response.details {
+                Some(response::Details::TransferAck(ack)) => {
+                    Ok(Self::TransferProgress { offset: ack.offset })
+                }
+                _ => Err(FenrisError::SerializationError(
+                    "missing transfer ack".to_string(),
+                )),
+            },
+            ResponseType::FileContentChunk => match response.details {
+                Some(response::Details::TransferChunk(chunk)) => {
+                    Ok(Self::ObjectContentChunk(chunk.into()))
+                }
+                _ => Err(FenrisError::SerializationError(
+                    "missing transfer chunk".to_string(),
+                )),
+            },
         }
     }
 }
@@ -188,8 +336,18 @@ impl From<FenrisOutput> for Response {
                 message.into_bytes(),
                 None,
             ),
-            FenrisOutput::ObjectContent { data } => {
+            FenrisOutput::ObjectContent { data, .. } => {
                 response(ResponseType::FileContent, true, String::new(), data, None)
+            }
+            FenrisOutput::ObjectContentChunk(chunk) => {
+                let data = chunk.data.clone();
+                response(
+                    ResponseType::FileContentChunk,
+                    true,
+                    String::new(),
+                    data,
+                    Some(response::Details::TransferChunk(chunk.into())),
+                )
             }
             FenrisOutput::ObjectInfo { metadata } => response(
                 ResponseType::FileInfo,
@@ -214,12 +372,77 @@ impl From<FenrisOutput> for Response {
                 path.to_string_lossy().as_bytes().to_vec(),
                 None,
             ),
+            FenrisOutput::TransferReady { chunk_size } => response(
+                ResponseType::TransferReady,
+                true,
+                String::new(),
+                vec![],
+                Some(response::Details::TransferAck(TransferAck {
+                    offset: 0,
+                    chunk_size: chunk_size.min(u32::MAX as usize) as u32,
+                })),
+            ),
+            FenrisOutput::TransferProgress { offset } => response(
+                ResponseType::TransferProgress,
+                true,
+                String::new(),
+                vec![],
+                Some(response::Details::TransferAck(TransferAck {
+                    offset,
+                    chunk_size: 0,
+                })),
+            ),
             FenrisOutput::Terminated => {
                 response(ResponseType::Terminated, true, String::new(), vec![], None)
             }
             FenrisOutput::Error { message } => {
                 response(ResponseType::Error, false, message, vec![], None)
             }
+        }
+    }
+}
+
+impl TryFrom<TransferMode> for ObjectWriteMode {
+    type Error = FenrisError;
+
+    fn try_from(mode: TransferMode) -> Result<Self, Self::Error> {
+        match mode {
+            TransferMode::TransferWrite => Ok(Self::Write),
+            TransferMode::TransferAppend => Ok(Self::Append),
+            TransferMode::TransferUpload => Ok(Self::Upload),
+            TransferMode::Unspecified => Err(FenrisError::InvalidProtocolMessage),
+        }
+    }
+}
+
+impl From<ObjectWriteMode> for TransferMode {
+    fn from(mode: ObjectWriteMode) -> Self {
+        match mode {
+            ObjectWriteMode::Write => Self::TransferWrite,
+            ObjectWriteMode::Append => Self::TransferAppend,
+            ObjectWriteMode::Upload => Self::TransferUpload,
+        }
+    }
+}
+
+impl From<ProtoTransferChunk> for TransferChunk {
+    fn from(chunk: ProtoTransferChunk) -> Self {
+        Self {
+            offset: chunk.offset,
+            data: chunk.data,
+            is_last: chunk.is_last,
+            total_size: chunk.total_size,
+        }
+    }
+}
+
+impl From<TransferChunk> for ProtoTransferChunk {
+    fn from(chunk: TransferChunk) -> Self {
+        Self {
+            offset: chunk.offset,
+            data: chunk.data,
+            is_last: chunk.is_last,
+            total_size: chunk.total_size,
         }
     }
 }
@@ -455,6 +678,8 @@ mod tests {
                 ),
                 FenrisOutput::ObjectContent {
                     data: b"body".to_vec(),
+                    total_size: 4,
+                    truncated: false,
                 },
             ),
             (
@@ -549,6 +774,102 @@ mod tests {
     }
 
     #[test]
+    fn transfer_commands_map_to_protobuf_details() {
+        let begin = FenrisCommand::BeginObjectWrite {
+            path: PathBuf::from("big.bin"),
+            mode: ObjectWriteMode::Upload,
+            total_size: 7,
+        };
+        let request = Request::from(begin.clone());
+        assert_eq!(request.command, RequestType::BeginObjectWrite as i32);
+        assert_eq!(FenrisCommand::try_from(request).unwrap(), begin);
+
+        let chunk = TransferChunk {
+            offset: 3,
+            data: b"data".to_vec(),
+            is_last: true,
+            total_size: 7,
+        };
+        let request = Request::from(FenrisCommand::WriteObjectChunk(chunk.clone()));
+        assert_eq!(request.command, RequestType::WriteObjectChunk as i32);
+        assert!(matches!(
+            request.details,
+            Some(request::Details::TransferChunk(_))
+        ));
+        assert_eq!(
+            FenrisCommand::try_from(request).unwrap(),
+            FenrisCommand::WriteObjectChunk(chunk)
+        );
+    }
+
+    #[test]
+    fn transfer_outputs_map_to_protobuf_details() {
+        let ready = Response::from(FenrisOutput::TransferReady { chunk_size: 4096 });
+        assert_eq!(ready.r#type, ResponseType::TransferReady as i32);
+        assert_eq!(
+            FenrisOutput::try_from(ready).unwrap(),
+            FenrisOutput::TransferReady { chunk_size: 4096 }
+        );
+
+        let progress = Response::from(FenrisOutput::TransferProgress { offset: 9 });
+        assert_eq!(progress.r#type, ResponseType::TransferProgress as i32);
+        assert_eq!(
+            FenrisOutput::try_from(progress).unwrap(),
+            FenrisOutput::TransferProgress { offset: 9 }
+        );
+
+        let chunk = TransferChunk {
+            offset: 0,
+            data: b"body".to_vec(),
+            is_last: true,
+            total_size: 4,
+        };
+        let response = Response::from(FenrisOutput::ObjectContentChunk(chunk.clone()));
+        assert_eq!(response.r#type, ResponseType::FileContentChunk as i32);
+        assert_eq!(
+            FenrisOutput::try_from(response).unwrap(),
+            FenrisOutput::ObjectContentChunk(chunk)
+        );
+    }
+
+    #[test]
+    fn invalid_transfer_details_are_rejected() {
+        let request = request_with_details(
+            RequestType::BeginObjectWrite,
+            PathBuf::from("a.txt"),
+            Vec::new(),
+            None,
+        );
+        assert!(matches!(
+            FenrisCommand::try_from(request),
+            Err(FenrisError::InvalidProtocolMessage)
+        ));
+
+        let request = request_with_details(
+            RequestType::WriteObjectChunk,
+            PathBuf::new(),
+            Vec::new(),
+            None,
+        );
+        assert!(matches!(
+            FenrisCommand::try_from(request),
+            Err(FenrisError::InvalidProtocolMessage)
+        ));
+
+        let response = response(
+            ResponseType::FileContentChunk,
+            true,
+            String::new(),
+            vec![],
+            None,
+        );
+        assert!(matches!(
+            FenrisOutput::try_from(response),
+            Err(FenrisError::SerializationError(_))
+        ));
+    }
+
+    #[test]
     fn protobuf_codec_round_trips_domain_command() {
         let command = FenrisCommand::WriteObject {
             path: PathBuf::from("a.txt"),
@@ -580,6 +901,7 @@ mod tests {
             filename: String::new(),
             ip_addr: 0,
             data: vec![],
+            details: None,
         };
         assert!(matches!(
             FenrisCommand::try_from(request),

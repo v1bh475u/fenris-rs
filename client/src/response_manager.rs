@@ -18,12 +18,31 @@ impl ResponseManager {
         match response {
             FenrisOutput::Pong => self.format_pong(),
             FenrisOutput::Success { message } => self.format_success(message),
-            FenrisOutput::ObjectContent { data } => self.format_object_content(data),
+            FenrisOutput::ObjectContent {
+                data,
+                total_size,
+                truncated,
+            } => self.format_object_content(data, *total_size, *truncated),
+            FenrisOutput::ObjectContentChunk(chunk) => {
+                self.format_object_content(&chunk.data, chunk.total_size, !chunk.is_last)
+            }
             FenrisOutput::ObjectInfo { metadata } => self.format_object_info(metadata),
             FenrisOutput::NamespaceListing { entries } => self.format_namespace_listing(entries),
             FenrisOutput::NamespaceChanged { path } => {
                 self.format_namespace_changed(&path.to_string_lossy())
             }
+            FenrisOutput::TransferReady { chunk_size } => FormattedResponse {
+                success: true,
+                message: format!("Transfer ready ({} byte chunks)", chunk_size),
+                details: None,
+                current_dir: None,
+            },
+            FenrisOutput::TransferProgress { offset } => FormattedResponse {
+                success: true,
+                message: format!("Transferred {} bytes", offset),
+                details: None,
+                current_dir: None,
+            },
             FenrisOutput::Terminated => FormattedResponse {
                 success: true,
                 message: "Server terminated".to_string(),
@@ -74,17 +93,24 @@ impl ResponseManager {
         }
     }
 
-    fn format_object_content(&self, data: &[u8]) -> FormattedResponse {
+    fn format_object_content(
+        &self,
+        data: &[u8],
+        total_size: u64,
+        already_truncated: bool,
+    ) -> FormattedResponse {
         let content = String::from_utf8_lossy(data).to_string();
-        let preview = if content.len() > 500 {
-            format!("{}...  ({} bytes total)", &content[..500], content.len())
+        let preview_text: String = content.chars().take(500).collect();
+        let display_truncated = already_truncated || content.chars().count() > 500;
+        let preview = if display_truncated {
+            format!("{}...  ({} bytes total)", preview_text, total_size)
         } else {
             content
         };
 
         FormattedResponse {
             success: true,
-            message: format!("File content ({} bytes):", data.len()),
+            message: format!("File content ({} bytes):", total_size),
             details: Some(preview),
             current_dir: None,
         }
@@ -247,11 +273,28 @@ mod tests {
 
         let formatted = manager.format_response(&FenrisOutput::ObjectContent {
             data: b"hello".to_vec(),
+            total_size: 5,
+            truncated: false,
         });
 
         assert!(formatted.success);
         assert!(formatted.message.contains("5 bytes"));
         assert_eq!(formatted.details.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_format_truncated_object_content() {
+        let manager = ResponseManager;
+
+        let formatted = manager.format_response(&FenrisOutput::ObjectContent {
+            data: b"preview".to_vec(),
+            total_size: 2048,
+            truncated: true,
+        });
+
+        assert!(formatted.success);
+        assert!(formatted.message.contains("2048 bytes"));
+        assert!(formatted.details.unwrap().contains("2048 bytes total"));
     }
 
     #[test]

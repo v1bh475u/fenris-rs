@@ -1,10 +1,20 @@
-use common::{FenrisCommand, FenrisError, FenrisOutput, Result, StorageBackend};
+use common::{
+    DEFAULT_TRANSFER_CHUNK_SIZE, FenrisCommand, FenrisError, FenrisOutput, ObjectWriteMode, Result,
+    StorageBackend, TransferChunk,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, error};
 
 pub struct RequestHandler<B: StorageBackend> {
     storage: Arc<B>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveWriteTransfer {
+    path: PathBuf,
+    expected_offset: u64,
+    total_size: u64,
 }
 
 impl<B: StorageBackend> RequestHandler<B> {
@@ -67,6 +77,12 @@ impl<B: StorageBackend> RequestHandler<B> {
             FenrisCommand::UploadObject { path, data } => {
                 self.handle_upload_object(path, data, current_dir).await
             }
+            FenrisCommand::BeginObjectWrite { .. } => Err(FenrisError::InvalidRequest(
+                "chunked write must be handled by a connection".to_string(),
+            )),
+            FenrisCommand::WriteObjectChunk(_) => Err(FenrisError::InvalidRequest(
+                "chunked write must be handled by a connection".to_string(),
+            )),
             FenrisCommand::ObjectInfo { path } => self.handle_object_info(path, current_dir).await,
             FenrisCommand::CreateNamespace { path } => {
                 self.handle_create_namespace(path, current_dir).await
@@ -96,8 +112,13 @@ impl<B: StorageBackend> RequestHandler<B> {
     async fn handle_read_object(&self, path: &Path, current_dir: &Path) -> Result<FenrisOutput> {
         let path = self.resolve_path(path, current_dir);
         let data = self.storage.get_object(&path).await?;
+        let total_size = data.len() as u64;
 
-        Ok(FenrisOutput::ObjectContent { data })
+        Ok(FenrisOutput::ObjectContent {
+            data,
+            total_size,
+            truncated: false,
+        })
     }
 
     async fn handle_write_object(
@@ -229,6 +250,102 @@ impl<B: StorageBackend> RequestHandler<B> {
 
         Ok(FenrisOutput::NamespaceChanged { path: target_path })
     }
+
+    pub async fn begin_object_write(
+        &self,
+        path: &Path,
+        mode: ObjectWriteMode,
+        total_size: u64,
+        current_dir: &Path,
+    ) -> Result<ActiveWriteTransfer> {
+        let path = self.resolve_path(path, current_dir);
+
+        match mode {
+            ObjectWriteMode::Write | ObjectWriteMode::Upload => {
+                self.storage.put_object(&path, b"").await?;
+            }
+            ObjectWriteMode::Append => {
+                self.storage.append_object(&path, b"").await?;
+            }
+        }
+
+        Ok(ActiveWriteTransfer {
+            path,
+            expected_offset: 0,
+            total_size,
+        })
+    }
+
+    pub async fn write_object_chunk(
+        &self,
+        transfer: &mut ActiveWriteTransfer,
+        chunk: &TransferChunk,
+        max_chunk_size: usize,
+    ) -> Result<FenrisOutput> {
+        if chunk.data.len() > max_chunk_size {
+            return Err(FenrisError::InvalidRequest(format!(
+                "chunk too large: max {} bytes, got {} bytes",
+                max_chunk_size,
+                chunk.data.len()
+            )));
+        }
+
+        if chunk.offset != transfer.expected_offset {
+            return Err(FenrisError::InvalidRequest(format!(
+                "unexpected chunk offset: expected {}, got {}",
+                transfer.expected_offset, chunk.offset
+            )));
+        }
+
+        if chunk.total_size != transfer.total_size {
+            return Err(FenrisError::InvalidRequest(format!(
+                "transfer size changed: expected {}, got {}",
+                transfer.total_size, chunk.total_size
+            )));
+        }
+
+        self.storage
+            .append_object(&transfer.path, &chunk.data)
+            .await?;
+        transfer.expected_offset += chunk.data.len() as u64;
+
+        if chunk.is_last {
+            if transfer.expected_offset != transfer.total_size {
+                return Err(FenrisError::InvalidRequest(format!(
+                    "incomplete transfer: expected {} bytes, got {} bytes",
+                    transfer.total_size, transfer.expected_offset
+                )));
+            }
+
+            return Ok(FenrisOutput::Success {
+                message: format!("Transfer complete: {} bytes", transfer.total_size),
+            });
+        }
+
+        Ok(FenrisOutput::TransferProgress {
+            offset: transfer.expected_offset,
+        })
+    }
+
+    pub async fn read_object_chunk(
+        &self,
+        path: &Path,
+        current_dir: &Path,
+        offset: u64,
+    ) -> Result<TransferChunk> {
+        let path = self.resolve_path(path, current_dir);
+        let chunk = self
+            .storage
+            .get_object_chunk(&path, offset, DEFAULT_TRANSFER_CHUNK_SIZE)
+            .await?;
+
+        Ok(TransferChunk {
+            offset: chunk.offset,
+            data: chunk.data,
+            is_last: chunk.is_last,
+            total_size: chunk.total_size,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -303,7 +420,14 @@ mod tests {
             )
             .await;
 
-        assert_eq!(read_output, FenrisOutput::ObjectContent { data });
+        assert_eq!(
+            read_output,
+            FenrisOutput::ObjectContent {
+                data,
+                total_size: 13,
+                truncated: false
+            }
+        );
     }
 
     #[tokio::test]
@@ -534,6 +658,242 @@ mod tests {
 
         let file_data = ops.get_object(Path::new("/upload.dat")).await.unwrap();
         assert_eq!(file_data, data);
+    }
+
+    #[tokio::test]
+    async fn test_chunked_write_creates_file() {
+        let (handler, ops) = create_handler();
+        let current_dir = PathBuf::from("/");
+        let mut transfer = handler
+            .begin_object_write(
+                Path::new("chunked.txt"),
+                ObjectWriteMode::Write,
+                10,
+                &current_dir,
+            )
+            .await
+            .unwrap();
+
+        let output = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 0,
+                    data: b"hello".to_vec(),
+                    is_last: false,
+                    total_size: 10,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, FenrisOutput::TransferProgress { offset: 5 });
+
+        let output = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 5,
+                    data: b"world".to_vec(),
+                    is_last: true,
+                    total_size: 10,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(output, FenrisOutput::Success { .. }));
+
+        let data = ops.get_object(Path::new("/chunked.txt")).await.unwrap();
+        assert_eq!(data, b"helloworld");
+    }
+
+    #[tokio::test]
+    async fn test_chunked_append_preserves_existing_content() {
+        let (handler, ops) = create_handler();
+        let current_dir = PathBuf::from("/");
+        ops.put_object(Path::new("/log.txt"), b"existing")
+            .await
+            .unwrap();
+        let mut transfer = handler
+            .begin_object_write(
+                Path::new("log.txt"),
+                ObjectWriteMode::Append,
+                5,
+                &current_dir,
+            )
+            .await
+            .unwrap();
+
+        let output = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 0,
+                    data: b"+more".to_vec(),
+                    is_last: true,
+                    total_size: 5,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(output, FenrisOutput::Success { .. }));
+
+        let data = ops.get_object(Path::new("/log.txt")).await.unwrap();
+        assert_eq!(data, b"existing+more");
+    }
+
+    #[tokio::test]
+    async fn test_chunked_upload_writes_all_chunks() {
+        let (handler, ops) = create_handler();
+        let current_dir = PathBuf::from("/");
+        let mut transfer = handler
+            .begin_object_write(
+                Path::new("upload.bin"),
+                ObjectWriteMode::Upload,
+                6,
+                &current_dir,
+            )
+            .await
+            .unwrap();
+
+        handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 0,
+                    data: b"abc".to_vec(),
+                    is_last: false,
+                    total_size: 6,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await
+            .unwrap();
+        let output = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 3,
+                    data: b"def".to_vec(),
+                    is_last: true,
+                    total_size: 6,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(output, FenrisOutput::Success { .. }));
+        let data = ops.get_object(Path::new("/upload.bin")).await.unwrap();
+        assert_eq!(data, b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn test_chunked_write_rejects_offset_mismatch() {
+        let (handler, _) = create_handler();
+        let current_dir = PathBuf::from("/");
+        let mut transfer = handler
+            .begin_object_write(
+                Path::new("bad.txt"),
+                ObjectWriteMode::Write,
+                4,
+                &current_dir,
+            )
+            .await
+            .unwrap();
+
+        let result = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 2,
+                    data: b"bad".to_vec(),
+                    is_last: true,
+                    total_size: 4,
+                },
+                DEFAULT_TRANSFER_CHUNK_SIZE,
+            )
+            .await;
+
+        assert!(matches!(result, Err(FenrisError::InvalidRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn test_chunked_write_rejects_oversized_chunk() {
+        let (handler, _) = create_handler();
+        let current_dir = PathBuf::from("/");
+        let mut transfer = handler
+            .begin_object_write(
+                Path::new("large.txt"),
+                ObjectWriteMode::Write,
+                5,
+                &current_dir,
+            )
+            .await
+            .unwrap();
+
+        let result = handler
+            .write_object_chunk(
+                &mut transfer,
+                &TransferChunk {
+                    offset: 0,
+                    data: b"large".to_vec(),
+                    is_last: true,
+                    total_size: 5,
+                },
+                4,
+            )
+            .await;
+
+        assert!(matches!(result, Err(FenrisError::InvalidRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn test_chunked_read_emits_ordered_chunks() {
+        let (handler, ops) = create_handler();
+        let current_dir = PathBuf::from("/");
+        let data = vec![b'x'; DEFAULT_TRANSFER_CHUNK_SIZE + 3];
+        ops.put_object(Path::new("/large.txt"), &data)
+            .await
+            .unwrap();
+
+        let first = handler
+            .read_object_chunk(Path::new("large.txt"), &current_dir, 0)
+            .await
+            .unwrap();
+        assert_eq!(first.offset, 0);
+        assert_eq!(first.data.len(), DEFAULT_TRANSFER_CHUNK_SIZE);
+        assert!(!first.is_last);
+        assert_eq!(first.total_size, data.len() as u64);
+
+        let second = handler
+            .read_object_chunk(
+                Path::new("large.txt"),
+                &current_dir,
+                DEFAULT_TRANSFER_CHUNK_SIZE as u64,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.data.len(), 3);
+        assert!(second.is_last);
+    }
+
+    #[tokio::test]
+    async fn test_chunked_read_handles_empty_object() {
+        let (handler, ops) = create_handler();
+        let current_dir = PathBuf::from("/");
+        ops.put_object(Path::new("/empty.txt"), b"").await.unwrap();
+
+        let chunk = handler
+            .read_object_chunk(Path::new("empty.txt"), &current_dir, 0)
+            .await
+            .unwrap();
+
+        assert!(chunk.data.is_empty());
+        assert!(chunk.is_last);
+        assert_eq!(chunk.total_size, 0);
     }
 
     #[tokio::test]

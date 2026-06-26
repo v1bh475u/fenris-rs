@@ -1,13 +1,31 @@
 use std::{fs, path::PathBuf};
 
-use common::{FenrisCommand, FenrisError, Result};
+use common::{FenrisCommand, FenrisError, ObjectWriteMode, Result};
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestManager;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientCommandPlan {
+    Single(FenrisCommand),
+    ChunkedRead {
+        path: PathBuf,
+    },
+    ChunkedInlineWrite {
+        path: PathBuf,
+        mode: ObjectWriteMode,
+        data: Vec<u8>,
+    },
+    ChunkedUpload {
+        source: PathBuf,
+        destination: PathBuf,
+        total_size: u64,
+    },
+}
+
 impl RequestManager {
-    pub fn build_request(&self, command: &str) -> Result<FenrisCommand> {
+    pub fn build_request(&self, command: &str) -> Result<ClientCommandPlan> {
         let parts: Vec<&str> = command.split_whitespace().collect();
 
         if parts.is_empty() {
@@ -36,28 +54,28 @@ impl RequestManager {
         }
     }
 
-    fn build_ping(&self) -> Result<FenrisCommand> {
+    fn build_ping(&self) -> Result<ClientCommandPlan> {
         debug!("Building PING command");
-        Ok(FenrisCommand::Ping)
+        Ok(ClientCommandPlan::Single(FenrisCommand::Ping))
     }
 
-    fn build_list_namespace(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_list_namespace(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         let path = args.first().unwrap_or(&".");
         debug!("Building LIST_NAMESPACE command for: {}", path);
-        Ok(FenrisCommand::ListNamespace {
+        Ok(ClientCommandPlan::Single(FenrisCommand::ListNamespace {
             path: PathBuf::from(path),
-        })
+        }))
     }
 
-    fn build_change_namespace(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_change_namespace(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         let path = args.first().unwrap_or(&"~");
         debug!("Building CHANGE_NAMESPACE command for: {}", path);
-        Ok(FenrisCommand::ChangeNamespace {
+        Ok(ClientCommandPlan::Single(FenrisCommand::ChangeNamespace {
             path: PathBuf::from(path),
-        })
+        }))
     }
 
-    fn build_read_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_read_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "read requires a filename".to_string(),
@@ -66,10 +84,10 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building READ_OBJECT command for: {}", path.display());
-        Ok(FenrisCommand::ReadObject { path })
+        Ok(ClientCommandPlan::ChunkedRead { path })
     }
 
-    fn build_write_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_write_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.len() < 2 {
             return Err(FenrisError::MissingField(
                 "write requires filename as well as data".to_string(),
@@ -79,13 +97,14 @@ impl RequestManager {
         let path = PathBuf::from(args[0]);
         let content = args[1..].join(" ");
         debug!("Building WRITE_OBJECT command for: {}", path.display());
-        Ok(FenrisCommand::WriteObject {
+        Ok(ClientCommandPlan::ChunkedInlineWrite {
             path,
+            mode: ObjectWriteMode::Write,
             data: content.into_bytes(),
         })
     }
 
-    fn build_create_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_create_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "create requires a filename".to_string(),
@@ -94,10 +113,12 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building CREATE_OBJECT command for: {}", path.display());
-        Ok(FenrisCommand::CreateObject { path })
+        Ok(ClientCommandPlan::Single(FenrisCommand::CreateObject {
+            path,
+        }))
     }
 
-    fn build_delete_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_delete_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "rm requires a filename".to_string(),
@@ -106,10 +127,12 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building DELETE_OBJECT command for: {}", path.display());
-        Ok(FenrisCommand::DeleteObject { path })
+        Ok(ClientCommandPlan::Single(FenrisCommand::DeleteObject {
+            path,
+        }))
     }
 
-    fn build_create_namespace(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_create_namespace(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "mkdir requires a directory name".to_string(),
@@ -118,10 +141,12 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building CREATE_NAMESPACE command for: {}", path.display());
-        Ok(FenrisCommand::CreateNamespace { path })
+        Ok(ClientCommandPlan::Single(FenrisCommand::CreateNamespace {
+            path,
+        }))
     }
 
-    fn build_delete_namespace(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_delete_namespace(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "rmdir requires a directory name".to_string(),
@@ -130,10 +155,12 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building DELETE_NAMESPACE command for: {}", path.display());
-        Ok(FenrisCommand::DeleteNamespace { path })
+        Ok(ClientCommandPlan::Single(FenrisCommand::DeleteNamespace {
+            path,
+        }))
     }
 
-    fn build_object_info(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_object_info(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.is_empty() {
             return Err(FenrisError::MissingField(
                 "info requires a filename".to_string(),
@@ -142,10 +169,12 @@ impl RequestManager {
 
         let path = PathBuf::from(args[0]);
         debug!("Building OBJECT_INFO command for: {}", path.display());
-        Ok(FenrisCommand::ObjectInfo { path })
+        Ok(ClientCommandPlan::Single(FenrisCommand::ObjectInfo {
+            path,
+        }))
     }
 
-    fn build_append_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_append_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.len() < 2 {
             return Err(FenrisError::MissingField(
                 "append requires filename as well as data".to_string(),
@@ -155,27 +184,33 @@ impl RequestManager {
         let path = PathBuf::from(args[0]);
         let content = args[1..].join(" ");
         debug!("Building APPEND_OBJECT command for: {}", path.display());
-        Ok(FenrisCommand::AppendObject {
+        Ok(ClientCommandPlan::ChunkedInlineWrite {
             path,
+            mode: ObjectWriteMode::Append,
             data: content.into_bytes(),
         })
     }
 
-    fn build_upload_object(&self, args: &[&str]) -> Result<FenrisCommand> {
+    fn build_upload_object(&self, args: &[&str]) -> Result<ClientCommandPlan> {
         if args.len() < 2 {
             return Err(FenrisError::MissingField(
                 "upload requires current location as well as destination path".to_string(),
             ));
         }
 
-        let file_path = args[0];
-        let file_data = fs::read(file_path).map_err(|e| {
-            FenrisError::FileOperationError(format!("Failed to read file {}: {}", file_path, e))
+        let source = PathBuf::from(args[0]);
+        let metadata = fs::metadata(&source).map_err(|e| {
+            FenrisError::FileOperationError(format!(
+                "Failed to inspect file {}: {}",
+                source.display(),
+                e
+            ))
         })?;
 
-        Ok(FenrisCommand::UploadObject {
-            path: PathBuf::from(args[1]),
-            data: file_data,
+        Ok(ClientCommandPlan::ChunkedUpload {
+            source,
+            destination: PathBuf::from(args[1]),
+            total_size: metadata.len(),
         })
     }
 }
@@ -191,7 +226,7 @@ mod tests {
         let manager = RequestManager;
         let command = manager.build_request("ping").unwrap();
 
-        assert_eq!(command, FenrisCommand::Ping);
+        assert_eq!(command, ClientCommandPlan::Single(FenrisCommand::Ping));
     }
 
     #[test]
@@ -201,17 +236,17 @@ mod tests {
         let command = manager.build_request("ls /home").unwrap();
         assert_eq!(
             command,
-            FenrisCommand::ListNamespace {
+            ClientCommandPlan::Single(FenrisCommand::ListNamespace {
                 path: PathBuf::from("/home")
-            }
+            })
         );
 
         let command_default = manager.build_request("ls").unwrap();
         assert_eq!(
             command_default,
-            FenrisCommand::ListNamespace {
+            ClientCommandPlan::Single(FenrisCommand::ListNamespace {
                 path: PathBuf::from(".")
-            }
+            })
         );
     }
 
@@ -221,17 +256,17 @@ mod tests {
         let command = manager.build_request("cd /tmp").unwrap();
         assert_eq!(
             command,
-            FenrisCommand::ChangeNamespace {
+            ClientCommandPlan::Single(FenrisCommand::ChangeNamespace {
                 path: PathBuf::from("/tmp")
-            }
+            })
         );
 
         let command_default = manager.build_request("cd").unwrap();
         assert_eq!(
             command_default,
-            FenrisCommand::ChangeNamespace {
+            ClientCommandPlan::Single(FenrisCommand::ChangeNamespace {
                 path: PathBuf::from("~")
-            }
+            })
         );
     }
 
@@ -242,7 +277,7 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::ReadObject {
+            ClientCommandPlan::ChunkedRead {
                 path: PathBuf::from("test.txt")
             }
         );
@@ -258,8 +293,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::WriteObject {
+            ClientCommandPlan::ChunkedInlineWrite {
                 path: PathBuf::from("test.txt"),
+                mode: ObjectWriteMode::Write,
                 data: b"Hello World".to_vec()
             }
         );
@@ -275,9 +311,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::CreateObject {
+            ClientCommandPlan::Single(FenrisCommand::CreateObject {
                 path: PathBuf::from("newfile.txt")
-            }
+            })
         );
 
         let result = manager.build_request("create");
@@ -291,9 +327,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::DeleteObject {
+            ClientCommandPlan::Single(FenrisCommand::DeleteObject {
                 path: PathBuf::from("oldfile.txt")
-            }
+            })
         );
 
         let result = manager.build_request("rm");
@@ -307,9 +343,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::CreateNamespace {
+            ClientCommandPlan::Single(FenrisCommand::CreateNamespace {
                 path: PathBuf::from("newdir")
-            }
+            })
         );
 
         let result = manager.build_request("mkdir");
@@ -323,9 +359,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::DeleteNamespace {
+            ClientCommandPlan::Single(FenrisCommand::DeleteNamespace {
                 path: PathBuf::from("olddir")
-            }
+            })
         );
 
         let result = manager.build_request("rmdir");
@@ -339,9 +375,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::ObjectInfo {
+            ClientCommandPlan::Single(FenrisCommand::ObjectInfo {
                 path: PathBuf::from("myfile.txt")
-            }
+            })
         );
 
         let result = manager.build_request("info");
@@ -355,8 +391,9 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::AppendObject {
+            ClientCommandPlan::ChunkedInlineWrite {
                 path: PathBuf::from("log.txt"),
+                mode: ObjectWriteMode::Append,
                 data: b"new entry".to_vec()
             }
         );
@@ -386,9 +423,10 @@ mod tests {
 
         assert_eq!(
             command,
-            FenrisCommand::UploadObject {
-                path: PathBuf::from("remote_file.txt"),
-                data: test_content.to_vec()
+            ClientCommandPlan::ChunkedUpload {
+                source: temp_path.clone(),
+                destination: PathBuf::from("remote_file.txt"),
+                total_size: test_content.len() as u64
             }
         );
 

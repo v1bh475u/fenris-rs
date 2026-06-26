@@ -16,6 +16,8 @@ enum RequestType {
   DELETE_DIR = 10;
   UPLOAD_FILE = 11;
   TERMINATE = 12;
+  BEGIN_OBJECT_WRITE = 13;
+  WRITE_OBJECT_CHUNK = 14;
 }
 
 message Request {
@@ -23,6 +25,11 @@ message Request {
   string filename = 2;
   uint32 ip_addr = 3;
   bytes data = 4;
+
+  oneof details {
+    TransferStart transfer_start = 5;
+    TransferChunk transfer_chunk = 6;
+  }
 }
 
 enum ResponseType {
@@ -34,6 +41,9 @@ enum ResponseType {
   ERROR = 5;
   TERMINATED = 6;
   CHANGED_DIR = 7;
+  TRANSFER_READY = 8;
+  TRANSFER_PROGRESS = 9;
+  FILE_CONTENT_CHUNK = 10;
 }
 
 message Response {
@@ -46,7 +56,34 @@ message Response {
   oneof details {
     FileInfo file_info = 5;
     DirectoryListing directory_listing = 6;
+    TransferAck transfer_ack = 7;
+    TransferChunk transfer_chunk = 8;
   }
+}
+
+enum TransferMode {
+  TRANSFER_MODE_UNSPECIFIED = 0;
+  TRANSFER_WRITE = 1;
+  TRANSFER_APPEND = 2;
+  TRANSFER_UPLOAD = 3;
+}
+
+message TransferStart {
+  string filename = 1;
+  TransferMode mode = 2;
+  uint64 total_size = 3;
+}
+
+message TransferChunk {
+  uint64 offset = 1;
+  bytes data = 2;
+  bool is_last = 3;
+  uint64 total_size = 4;
+}
+
+message TransferAck {
+  uint64 offset = 1;
+  uint32 chunk_size = 2;
 }
 
 message FileInfo {
