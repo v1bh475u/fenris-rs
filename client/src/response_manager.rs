@@ -1,4 +1,4 @@
-use common::proto::{DirectoryListing, FileInfo, Response, ResponseType, response};
+use common::{FenrisMetadata, FenrisOutput};
 use tracing::debug;
 
 pub struct FormattedResponse {
@@ -8,15 +8,38 @@ pub struct FormattedResponse {
     pub current_dir: Option<String>,
 }
 
-pub trait ResponseFormatter: Send + Sync {
-    fn format_response(&self, response: &Response) -> FormattedResponse;
-}
-
 #[derive(Debug, Clone, Default)]
-pub struct DefaultResponseFormatter;
+pub struct ResponseManager;
 
-impl DefaultResponseFormatter {
-    fn format_pong(&self, _response: &Response) -> FormattedResponse {
+impl ResponseManager {
+    pub fn format_response(&self, response: &FenrisOutput) -> FormattedResponse {
+        debug!("Formatting domain response: {:?}", response);
+
+        match response {
+            FenrisOutput::Pong => self.format_pong(),
+            FenrisOutput::Success { message } => self.format_success(message),
+            FenrisOutput::ObjectContent { data } => self.format_object_content(data),
+            FenrisOutput::ObjectInfo { metadata } => self.format_object_info(metadata),
+            FenrisOutput::NamespaceListing { entries } => self.format_namespace_listing(entries),
+            FenrisOutput::NamespaceChanged { path } => {
+                self.format_namespace_changed(&path.to_string_lossy())
+            }
+            FenrisOutput::Terminated => FormattedResponse {
+                success: true,
+                message: "Server terminated".to_string(),
+                details: None,
+                current_dir: None,
+            },
+            FenrisOutput::Error { message } => FormattedResponse {
+                success: false,
+                message: message.clone(),
+                details: None,
+                current_dir: None,
+            },
+        }
+    }
+
+    fn format_pong(&self) -> FormattedResponse {
         FormattedResponse {
             success: true,
             message: "PONG - Server is alive! ".to_string(),
@@ -25,84 +48,67 @@ impl DefaultResponseFormatter {
         }
     }
 
-    fn format_success(&self, response: &Response) -> FormattedResponse {
-        let msg = if response.data.is_empty() {
+    fn format_success(&self, message: &str) -> FormattedResponse {
+        let message = if message.is_empty() {
             "Operation successful".to_string()
         } else {
-            String::from_utf8_lossy(&response.data).to_string()
+            message.to_string()
         };
 
         FormattedResponse {
             success: true,
-            message: msg,
+            message,
             details: None,
             current_dir: None,
         }
     }
 
-    fn format_change_dir(&self, response: &Response) -> FormattedResponse {
-        let dir = if response.data.is_empty() {
-            "/".to_string()
-        } else {
-            String::from_utf8_lossy(&response.data).to_string()
-        };
+    fn format_namespace_changed(&self, path: &str) -> FormattedResponse {
+        let path = if path.is_empty() { "/" } else { path };
 
         FormattedResponse {
             success: true,
-            message: format!("Changed directory to {}", dir),
+            message: format!("Changed directory to {}", path),
             details: None,
-            current_dir: Some(dir),
+            current_dir: Some(path.to_string()),
         }
     }
 
-    fn format_file_content(&self, response: &Response) -> FormattedResponse {
-        let content = String::from_utf8_lossy(&response.data).to_string();
+    fn format_object_content(&self, data: &[u8]) -> FormattedResponse {
+        let content = String::from_utf8_lossy(data).to_string();
         let preview = if content.len() > 500 {
             format!("{}...  ({} bytes total)", &content[..500], content.len())
         } else {
-            content.clone()
+            content
         };
 
         FormattedResponse {
             success: true,
-            message: format!("File content ({} bytes):", response.data.len()),
+            message: format!("File content ({} bytes):", data.len()),
             details: Some(preview),
             current_dir: None,
         }
     }
 
-    fn format_file_info(&self, response: &Response) -> FormattedResponse {
-        if let Some(response::Details::FileInfo(ref file_info)) = response.details {
-            return self.format_file_info_detail(file_info);
-        }
-
-        FormattedResponse {
-            success: true,
-            message: "File info received".to_string(),
-            details: None,
-            current_dir: None,
-        }
-    }
-
-    fn format_file_info_detail(&self, info: &FileInfo) -> FormattedResponse {
-        let file_type = if info.is_directory {
+    fn format_object_info(&self, metadata: &FenrisMetadata) -> FormattedResponse {
+        let object_type = if metadata.is_namespace {
             "Directory"
         } else {
             "File"
         };
 
-        let size_str = if info.is_directory {
+        let size = if metadata.is_namespace {
             "-".to_string()
         } else {
-            format_size(info.size)
+            format_size(metadata.size)
         };
 
-        let perms = format_permissions(info.permissions);
-        let modified = format_timestamp(info.modified_time);
+        let permissions = format_permissions(metadata.permissions);
+        let modified = format_timestamp(metadata.modified_time);
 
         let details = format!(
             "{}\nType: {}\nSize: {}\nPermissions: {}\nModified: {}",
-            info.name, file_type, size_str, perms, modified
+            metadata.name, object_type, size, permissions, modified
         );
 
         FormattedResponse {
@@ -113,21 +119,8 @@ impl DefaultResponseFormatter {
         }
     }
 
-    fn format_dir_listing(&self, response: &Response) -> FormattedResponse {
-        if let Some(response::Details::DirectoryListing(ref dir_listing)) = response.details {
-            return self.format_dir_listing_detail(dir_listing);
-        }
-
-        FormattedResponse {
-            success: true,
-            message: "Empty directory".to_string(),
-            details: None,
-            current_dir: None,
-        }
-    }
-
-    fn format_dir_listing_detail(&self, listing: &DirectoryListing) -> FormattedResponse {
-        if listing.entries.is_empty() {
+    fn format_namespace_listing(&self, entries: &[FenrisMetadata]) -> FormattedResponse {
+        if entries.is_empty() {
             return FormattedResponse {
                 success: true,
                 message: "Directory is empty".to_string(),
@@ -137,8 +130,7 @@ impl DefaultResponseFormatter {
         }
 
         let mut output = String::new();
-        output.push_str(&format!("Found {} entries:\n\n", listing.entries.len()));
-
+        output.push_str(&format!("Found {} entries:\n\n", entries.len()));
         output.push_str(&format!(
             "{:40} {: >10} {:>12} {}\n",
             "Name", "Type", "Size", "Modified"
@@ -146,9 +138,9 @@ impl DefaultResponseFormatter {
         output.push_str(&"-".repeat(80));
         output.push('\n');
 
-        for entry in &listing.entries {
-            let file_type = if entry.is_directory { "DIR" } else { "FILE" };
-            let size = if entry.is_directory {
+        for entry in entries {
+            let object_type = if entry.is_namespace { "DIR" } else { "FILE" };
+            let size = if entry.is_namespace {
                 "-".to_string()
             } else {
                 format_size(entry.size)
@@ -157,7 +149,7 @@ impl DefaultResponseFormatter {
 
             output.push_str(&format!(
                 "{:40} {:>10} {:>12} {}\n",
-                entry.name, file_type, size, modified
+                entry.name, object_type, size, modified
             ));
         }
 
@@ -166,66 +158,6 @@ impl DefaultResponseFormatter {
             message: "Directory listing:".to_string(),
             details: Some(output),
             current_dir: None,
-        }
-    }
-
-    fn format_error(&self, response: &Response) -> FormattedResponse {
-        FormattedResponse {
-            success: false,
-            message: response.error_message.clone(),
-            details: None,
-            current_dir: None,
-        }
-    }
-}
-
-impl ResponseFormatter for DefaultResponseFormatter {
-    fn format_response(&self, response: &Response) -> FormattedResponse {
-        debug!("Formatting response type: {:?}", response.r#type);
-
-        if !response.success {
-            return FormattedResponse {
-                success: false,
-                message: response.error_message.clone(),
-                details: None,
-                current_dir: None,
-            };
-        }
-
-        let response_type = ResponseType::try_from(response.r#type).unwrap_or(ResponseType::Error);
-
-        match response_type {
-            ResponseType::Pong => self.format_pong(response),
-            ResponseType::Success => self.format_success(response),
-            ResponseType::ChangedDir => self.format_change_dir(response),
-            ResponseType::FileContent => self.format_file_content(response),
-            ResponseType::FileInfo => self.format_file_info(response),
-            ResponseType::DirListing => self.format_dir_listing(response),
-            ResponseType::Error => self.format_error(response),
-            ResponseType::Terminated => FormattedResponse {
-                success: true,
-                message: "Server terminated".to_string(),
-                details: None,
-                current_dir: None,
-            },
-        }
-    }
-}
-
-pub struct ResponseManager {
-    formatter: Box<dyn ResponseFormatter>,
-}
-
-impl ResponseManager {
-    pub fn format_response(&self, response: &Response) -> FormattedResponse {
-        self.formatter.format_response(response)
-    }
-}
-
-impl Default for ResponseManager {
-    fn default() -> Self {
-        Self {
-            formatter: Box::new(DefaultResponseFormatter),
         }
     }
 }
@@ -289,14 +221,10 @@ mod tests {
 
     #[test]
     fn test_default_formatter() {
-        let formatter: DefaultResponseFormatter = Default::default();
+        let formatter = ResponseManager;
 
-        let response = Response {
-            r#type: ResponseType::Success as i32,
-            success: true,
-            error_message: String::new(),
-            data: b"Test data".to_vec(),
-            details: None,
+        let response = FenrisOutput::Success {
+            message: "Test data".to_string(),
         };
 
         let formatted = formatter.format_response(&response);
@@ -306,17 +234,9 @@ mod tests {
 
     #[test]
     fn test_response_manager_wrapper() {
-        let manager = ResponseManager::default();
+        let manager = ResponseManager;
 
-        let response = Response {
-            r#type: ResponseType::Pong as i32,
-            success: true,
-            error_message: String::new(),
-            data: vec![],
-            details: None,
-        };
-
-        let formatted = manager.format_response(&response);
+        let formatted = manager.format_response(&FenrisOutput::Pong);
         assert!(formatted.success);
         assert!(formatted.message.contains("PONG"));
     }

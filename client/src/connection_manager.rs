@@ -1,6 +1,4 @@
-use common::{
-    DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Response, Result,
-};
+use common::{DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Result};
 
 use std::io::{self};
 
@@ -81,7 +79,6 @@ impl ConnectionManager {
         let request = self.request_manager.build_request(command)?;
 
         let response = self.send_request_receive_response(&request).await?;
-        let response = Response::from(response);
 
         let formatted = self.response_manager.format_response(&response);
         Ok(formatted)
