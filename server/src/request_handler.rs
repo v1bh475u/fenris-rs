@@ -465,6 +465,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_append_file_uses_storage_create_semantics() {
+        let (handler, ops) = create_handler();
+        let mut current_dir = PathBuf::from("/");
+
+        let output = handler
+            .process_command(
+                1,
+                &FenrisCommand::AppendObject {
+                    path: PathBuf::from("created.log"),
+                    data: b"Created by append".to_vec(),
+                },
+                &mut current_dir,
+            )
+            .await;
+
+        assert!(matches!(output, FenrisOutput::Success { .. }));
+
+        let content = ops.get_object(Path::new("/created.log")).await.unwrap();
+        assert_eq!(content, b"Created by append");
+    }
+
+    #[tokio::test]
     async fn test_delete_file() {
         let (handler, ops) = create_handler();
         let mut current_dir = PathBuf::from("/");
