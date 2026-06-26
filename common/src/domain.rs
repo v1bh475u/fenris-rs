@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{FenrisError, Request, RequestType};
+use crate::{
+    FenrisError, FileMetadata, Request, RequestType, Response, ResponseType,
+    proto::{DirectoryListing, FileInfo, response},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FenrisCommand {
@@ -117,5 +120,152 @@ fn request(command: RequestType, path: PathBuf, data: Vec<u8>) -> Request {
         filename: path.to_string_lossy().to_string(),
         ip_addr: 0,
         data,
+    }
+}
+
+impl TryFrom<Response> for FenrisOutput {
+    type Error = FenrisError;
+
+    fn try_from(response: Response) -> Result<Self, FenrisError> {
+        if !response.success {
+            return Ok(Self::Error {
+                message: response.error_message,
+            });
+        }
+
+        let response_type = ResponseType::try_from(response.r#type)
+            .map_err(|_| FenrisError::InvalidProtocolMessage)?;
+
+        match response_type {
+            ResponseType::Pong => Ok(Self::Pong),
+            ResponseType::FileInfo => match response.details {
+                Some(response::Details::FileInfo(info)) => Ok(Self::ObjectInfo {
+                    metadata: info.into(),
+                }),
+                _ => Err(FenrisError::SerializationError(
+                    "missing file info".to_string(),
+                )),
+            },
+            ResponseType::FileContent => Ok(Self::ObjectContent {
+                data: response.data,
+            }),
+            ResponseType::DirListing => match response.details {
+                Some(response::Details::DirectoryListing(listing)) => Ok(Self::NamespaceListing {
+                    entries: listing.entries.into_iter().map(FenrisMetadata::from).collect(),
+                }),
+                _ => Err(FenrisError::SerializationError(
+                    "missing directory listing".to_string(),
+                )),
+            },
+            ResponseType::Success => Ok(Self::Success {
+                message: String::from_utf8_lossy(&response.data).to_string(),
+            }),
+            ResponseType::Error => Ok(Self::Error {
+                message: response.error_message,
+            }),
+            ResponseType::Terminated => Ok(Self::Terminated),
+            ResponseType::ChangedDir => Ok(Self::NamespaceChanged {
+                path: PathBuf::from(String::from_utf8_lossy(&response.data).to_string()),
+            }),
+        }
+    }
+}
+
+impl From<FenrisOutput> for Response {
+    fn from(output: FenrisOutput) -> Self {
+        match output {
+            FenrisOutput::Pong => response(ResponseType::Pong, true, String::new(), vec![], None),
+            FenrisOutput::Success { message } => response(
+                ResponseType::Success,
+                true,
+                String::new(),
+                message.into_bytes(),
+                None,
+            ),
+            FenrisOutput::ObjectContent { data } => {
+                response(ResponseType::FileContent, true, String::new(), data, None)
+            }
+            FenrisOutput::ObjectInfo { metadata } => response(
+                ResponseType::FileInfo,
+                true,
+                String::new(),
+                vec![],
+                Some(response::Details::FileInfo(metadata.into())),
+            ),
+            FenrisOutput::NamespaceListing { entries } => response(
+                ResponseType::DirListing,
+                true,
+                String::new(),
+                vec![],
+                Some(response::Details::DirectoryListing(DirectoryListing {
+                    entries: entries.into_iter().map(FileInfo::from).collect(),
+                })),
+            ),
+            FenrisOutput::NamespaceChanged { path } => response(
+                ResponseType::ChangedDir,
+                true,
+                String::new(),
+                path.to_string_lossy().as_bytes().to_vec(),
+                None,
+            ),
+            FenrisOutput::Terminated => {
+                response(ResponseType::Terminated, true, String::new(), vec![], None)
+            }
+            FenrisOutput::Error { message } => {
+                response(ResponseType::Error, false, message, vec![], None)
+            }
+        }
+    }
+}
+
+impl From<FileMetadata> for FenrisMetadata {
+    fn from(metadata: FileMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            size: metadata.size,
+            is_namespace: metadata.is_directory,
+            modified_time: metadata.modified_time,
+            permissions: metadata.permissions,
+        }
+    }
+}
+
+impl From<FileInfo> for FenrisMetadata {
+    fn from(info: FileInfo) -> Self {
+        Self {
+            name: info.name,
+            size: info.size,
+            is_namespace: info.is_directory,
+            modified_time: info.modified_time,
+            permissions: info.permissions,
+        }
+    }
+}
+
+impl From<FenrisMetadata> for FileInfo {
+    fn from(metadata: FenrisMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            size: metadata.size,
+            is_directory: metadata.is_namespace,
+            modified_time: metadata.modified_time,
+            permissions: metadata.permissions,
+        }
+    }
+}
+
+fn response(
+    response_type: ResponseType,
+    success: bool,
+    error_message: String,
+    data: Vec<u8>,
+    details: Option<response::Details>,
+) -> Response {
+    Response {
+        r#type: response_type as i32,
+        success,
+        error_message,
+        data,
+        details,
     }
 }
