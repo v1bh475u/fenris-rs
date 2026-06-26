@@ -1,4 +1,4 @@
-use crate::{FenrisError, Result};
+use crate::{FenrisCommand, FenrisError, FenrisOutput, Request, Response, Result};
 use prost::Message;
 
 pub trait ProtocolCodec<M> {
@@ -23,6 +23,30 @@ where
 
     fn decode(data: &[u8]) -> Result<M> {
         M::decode(data).map_err(|e| FenrisError::SerializationError(e.to_string()))
+    }
+}
+
+impl ProtocolCodec<FenrisCommand> for ProtobufCodec {
+    fn encode(message: &FenrisCommand) -> Result<Vec<u8>> {
+        let request = Request::from(message.clone());
+        <Self as ProtocolCodec<Request>>::encode(&request)
+    }
+
+    fn decode(data: &[u8]) -> Result<FenrisCommand> {
+        let request = <Self as ProtocolCodec<Request>>::decode(data)?;
+        FenrisCommand::try_from(request)
+    }
+}
+
+impl ProtocolCodec<FenrisOutput> for ProtobufCodec {
+    fn encode(message: &FenrisOutput) -> Result<Vec<u8>> {
+        let response = Response::from(message.clone());
+        <Self as ProtocolCodec<Response>>::encode(&response)
+    }
+
+    fn decode(data: &[u8]) -> Result<FenrisOutput> {
+        let response = <Self as ProtocolCodec<Response>>::decode(data)?;
+        FenrisOutput::try_from(response)
     }
 }
 
