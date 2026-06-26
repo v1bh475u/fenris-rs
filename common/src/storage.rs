@@ -1,5 +1,7 @@
-use crate::{DefaultFileOperations, FenrisMetadata, FileOperations, Result};
-use std::path::{Path, PathBuf};
+use crate::{DefaultFileOperations, FenrisError, FenrisMetadata, FileOperations, Result};
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + 'static {
@@ -103,21 +105,310 @@ impl StorageBackend for TokioFsStorage {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MemoryStorage {
+    state: Arc<Mutex<MemoryStorageState>>,
+}
+
+#[derive(Debug)]
+struct MemoryStorageState {
+    objects: HashMap<PathBuf, Vec<u8>>,
+    namespaces: HashSet<PathBuf>,
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for MemoryStorageState {
+    fn default() -> Self {
+        Self {
+            objects: HashMap::new(),
+            namespaces: HashSet::from([PathBuf::from("/")]),
+        }
+    }
+}
+
+impl MemoryStorage {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(MemoryStorageState::default())),
+        }
+    }
+
+    fn normalize_path(path: &Path) -> Result<PathBuf> {
+        let mut normalized = PathBuf::from("/");
+
+        for component in path.components() {
+            match component {
+                Component::RootDir | Component::CurDir => {}
+                Component::Normal(name) => normalized.push(name),
+                Component::ParentDir | Component::Prefix(_) => {
+                    return Err(FenrisError::FileOperationError(
+                        "Path outside storage root".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(normalized)
+    }
+
+    fn parent_namespace(path: &Path) -> Option<PathBuf> {
+        path.parent().map(|parent| {
+            if parent.as_os_str().is_empty() {
+                PathBuf::from("/")
+            } else {
+                parent.to_path_buf()
+            }
+        })
+    }
+
+    fn metadata_for(path: &Path, size: u64, is_namespace: bool) -> FenrisMetadata {
+        FenrisMetadata {
+            name: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            size,
+            is_namespace,
+            modified_time: 0,
+            permissions: if is_namespace { 0o755 } else { 0o644 },
+        }
+    }
+
+    fn lock_state(&self) -> Result<MutexGuard<'_, MemoryStorageState>> {
+        self.state.lock().map_err(|_| {
+            FenrisError::FileOperationError("Memory storage lock poisoned".to_string())
+        })
+    }
+
+    fn ensure_parent_namespace(state: &MemoryStorageState, path: &Path) -> Result<()> {
+        if Self::parent_namespace(path)
+            .as_ref()
+            .is_some_and(|parent| state.namespaces.contains(parent))
+        {
+            return Ok(());
+        }
+
+        Err(FenrisError::FileOperationError(
+            "Parent namespace not found".to_string(),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl StorageBackend for MemoryStorage {
+    async fn put_object(&self, path: &Path, data: &[u8]) -> Result<()> {
+        let path = Self::normalize_path(path)?;
+        let mut state = self.lock_state()?;
+
+        if path == Path::new("/") || state.namespaces.contains(&path) {
+            return Err(FenrisError::FileOperationError(
+                "Path is a namespace".to_string(),
+            ));
+        }
+
+        Self::ensure_parent_namespace(&state, &path)?;
+        state.objects.insert(path, data.to_vec());
+        Ok(())
+    }
+
+    async fn get_object(&self, path: &Path) -> Result<Vec<u8>> {
+        let path = Self::normalize_path(path)?;
+        self.lock_state()?
+            .objects
+            .get(&path)
+            .cloned()
+            .ok_or_else(|| FenrisError::FileOperationError("Object not found".to_string()))
+    }
+
+    async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()> {
+        let path = Self::normalize_path(path)?;
+        let mut state = self.lock_state()?;
+
+        if path == Path::new("/") || state.namespaces.contains(&path) {
+            return Err(FenrisError::FileOperationError(
+                "Path is a namespace".to_string(),
+            ));
+        }
+
+        Self::ensure_parent_namespace(&state, &path)?;
+        state
+            .objects
+            .entry(path)
+            .or_default()
+            .extend_from_slice(data);
+        Ok(())
+    }
+
+    async fn delete_object(&self, path: &Path) -> Result<()> {
+        let path = Self::normalize_path(path)?;
+        if self.lock_state()?.objects.remove(&path).is_some() {
+            return Ok(());
+        }
+
+        Err(FenrisError::FileOperationError(
+            "Object not found".to_string(),
+        ))
+    }
+
+    async fn metadata(&self, path: &Path) -> Result<FenrisMetadata> {
+        let path = Self::normalize_path(path)?;
+        let state = self.lock_state()?;
+
+        if let Some(data) = state.objects.get(&path) {
+            return Ok(Self::metadata_for(&path, data.len() as u64, false));
+        }
+
+        if state.namespaces.contains(&path) {
+            return Ok(Self::metadata_for(&path, 0, true));
+        }
+
+        Err(FenrisError::FileOperationError(
+            "Path not found".to_string(),
+        ))
+    }
+
+    async fn create_namespace(&self, path: &Path) -> Result<()> {
+        let path = Self::normalize_path(path)?;
+        let mut state = self.lock_state()?;
+
+        if state.objects.contains_key(&path) {
+            return Err(FenrisError::FileOperationError(
+                "Path is an object".to_string(),
+            ));
+        }
+
+        if path != Path::new("/") {
+            Self::ensure_parent_namespace(&state, &path)?;
+        }
+
+        state.namespaces.insert(path);
+        Ok(())
+    }
+
+    async fn list_namespace(&self, path: &Path) -> Result<Vec<FenrisMetadata>> {
+        let path = Self::normalize_path(path)?;
+        let state = self.lock_state()?;
+
+        if !state.namespaces.contains(&path) {
+            return Err(FenrisError::FileOperationError(
+                "Namespace not found".to_string(),
+            ));
+        }
+
+        let mut entries = Vec::new();
+
+        for namespace in &state.namespaces {
+            if namespace != &path && namespace.parent() == Some(path.as_path()) {
+                entries.push(Self::metadata_for(namespace, 0, true));
+            }
+        }
+
+        for (object, data) in &state.objects {
+            if object.parent() == Some(path.as_path()) {
+                entries.push(Self::metadata_for(object, data.len() as u64, false));
+            }
+        }
+
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
+    }
+
+    async fn delete_namespace(&self, path: &Path) -> Result<()> {
+        let path = Self::normalize_path(path)?;
+        let mut state = self.lock_state()?;
+
+        if path == Path::new("/") {
+            return Err(FenrisError::FileOperationError(
+                "Cannot delete root namespace".to_string(),
+            ));
+        }
+
+        if !state.namespaces.contains(&path) {
+            return Err(FenrisError::FileOperationError(
+                "Namespace not found".to_string(),
+            ));
+        }
+
+        let has_children = state
+            .namespaces
+            .iter()
+            .any(|namespace| namespace != &path && namespace.starts_with(&path))
+            || state.objects.keys().any(|object| object.starts_with(&path));
+
+        if has_children {
+            return Err(FenrisError::FileOperationError(
+                "Namespace is not empty".to_string(),
+            ));
+        }
+
+        state.namespaces.remove(&path);
+        Ok(())
+    }
+
+    async fn exists(&self, path: &Path) -> bool {
+        let Ok(path) = Self::normalize_path(path) else {
+            return false;
+        };
+
+        self.state.lock().is_ok_and(|state| {
+            state.objects.contains_key(&path) || state.namespaces.contains(&path)
+        })
+    }
+
+    async fn is_namespace(&self, path: &Path) -> bool {
+        let Ok(path) = Self::normalize_path(path) else {
+            return false;
+        };
+
+        self.state
+            .lock()
+            .is_ok_and(|state| state.namespaces.contains(&path))
+    }
+
+    async fn is_object(&self, path: &Path) -> bool {
+        let Ok(path) = Self::normalize_path(path) else {
+            return false;
+        };
+
+        self.state
+            .lock()
+            .is_ok_and(|state| state.objects.contains_key(&path))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FenrisError;
     use tempfile::TempDir;
 
-    fn storage(temp_dir: &TempDir) -> TokioFsStorage {
-        TokioFsStorage::new(temp_dir.path().to_path_buf())
+    struct TestBackend<S> {
+        storage: S,
+        _temp_dir: Option<TempDir>,
     }
 
-    #[tokio::test]
-    async fn put_and_get_object_round_trip() {
+    fn tokio_fs_storage() -> TestBackend<TokioFsStorage> {
         let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
+        let storage = TokioFsStorage::new(temp_dir.path().to_path_buf());
+        TestBackend {
+            storage,
+            _temp_dir: Some(temp_dir),
+        }
+    }
 
+    fn memory_storage() -> TestBackend<MemoryStorage> {
+        TestBackend {
+            storage: MemoryStorage::new(),
+            _temp_dir: None,
+        }
+    }
+
+    async fn assert_put_and_get_object_round_trip<S: StorageBackend>(storage: &S) {
         storage
             .put_object(Path::new("data.txt"), b"hello")
             .await
@@ -127,11 +418,7 @@ mod tests {
         assert_eq!(data, b"hello");
     }
 
-    #[tokio::test]
-    async fn put_object_overwrites_existing_object() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_put_object_overwrites_existing_object<S: StorageBackend>(storage: &S) {
         storage
             .put_object(Path::new("data.txt"), b"first")
             .await
@@ -145,11 +432,7 @@ mod tests {
         assert_eq!(data, b"second");
     }
 
-    #[tokio::test]
-    async fn append_object_extends_existing_object() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_append_object_extends_existing_object<S: StorageBackend>(storage: &S) {
         storage
             .put_object(Path::new("log.txt"), b"first")
             .await
@@ -163,11 +446,9 @@ mod tests {
         assert_eq!(data, b"first second");
     }
 
-    #[tokio::test]
-    async fn append_object_creates_missing_object_when_parent_exists() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_append_object_creates_missing_object_when_parent_exists<S: StorageBackend>(
+        storage: &S,
+    ) {
         storage.create_namespace(Path::new("logs")).await.unwrap();
         storage
             .append_object(Path::new("logs/today.txt"), b"entry")
@@ -181,11 +462,7 @@ mod tests {
         assert_eq!(data, b"entry");
     }
 
-    #[tokio::test]
-    async fn delete_object_removes_object() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_delete_object_removes_object<S: StorageBackend>(storage: &S) {
         storage
             .put_object(Path::new("data.txt"), b"hello")
             .await
@@ -197,11 +474,7 @@ mod tests {
         assert!(!storage.exists(Path::new("data.txt")).await);
     }
 
-    #[tokio::test]
-    async fn metadata_reports_object_and_namespace_shape() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_metadata_reports_object_and_namespace_shape<S: StorageBackend>(storage: &S) {
         storage
             .put_object(Path::new("data.txt"), b"hello")
             .await
@@ -218,11 +491,7 @@ mod tests {
         assert!(namespace.is_namespace);
     }
 
-    #[tokio::test]
-    async fn namespace_create_list_and_delete() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_namespace_create_list_and_delete<S: StorageBackend>(storage: &S) {
         storage.create_namespace(Path::new("docs")).await.unwrap();
         storage
             .put_object(Path::new("docs/a.txt"), b"a")
@@ -245,11 +514,9 @@ mod tests {
         assert!(!storage.exists(Path::new("docs/nested")).await);
     }
 
-    #[tokio::test]
-    async fn existence_and_kind_checks_reflect_storage_state() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_existence_and_kind_checks_reflect_storage_state<S: StorageBackend>(
+        storage: &S,
+    ) {
         storage
             .put_object(Path::new("data.txt"), b"hello")
             .await
@@ -265,13 +532,102 @@ mod tests {
         assert!(!storage.is_object(Path::new("docs")).await);
     }
 
-    #[tokio::test]
-    async fn path_traversal_is_rejected() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = storage(&temp_dir);
-
+    async fn assert_path_traversal_is_rejected<S: StorageBackend>(storage: &S) {
         let result = storage.get_object(Path::new("../../../etc/passwd")).await;
 
         assert!(matches!(result, Err(FenrisError::FileOperationError(_))));
+    }
+
+    macro_rules! storage_contract_tests {
+        ($module:ident, $storage:ident) => {
+            mod $module {
+                use super::*;
+
+                #[tokio::test]
+                async fn put_and_get_object_round_trip() {
+                    let backend = $storage();
+                    assert_put_and_get_object_round_trip(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn put_object_overwrites_existing_object() {
+                    let backend = $storage();
+                    assert_put_object_overwrites_existing_object(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn append_object_extends_existing_object() {
+                    let backend = $storage();
+                    assert_append_object_extends_existing_object(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn append_object_creates_missing_object_when_parent_exists() {
+                    let backend = $storage();
+                    assert_append_object_creates_missing_object_when_parent_exists(
+                        &backend.storage,
+                    )
+                    .await;
+                }
+
+                #[tokio::test]
+                async fn delete_object_removes_object() {
+                    let backend = $storage();
+                    assert_delete_object_removes_object(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn metadata_reports_object_and_namespace_shape() {
+                    let backend = $storage();
+                    assert_metadata_reports_object_and_namespace_shape(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn namespace_create_list_and_delete() {
+                    let backend = $storage();
+                    assert_namespace_create_list_and_delete(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn existence_and_kind_checks_reflect_storage_state() {
+                    let backend = $storage();
+                    assert_existence_and_kind_checks_reflect_storage_state(&backend.storage).await;
+                }
+
+                #[tokio::test]
+                async fn path_traversal_is_rejected() {
+                    let backend = $storage();
+                    assert_path_traversal_is_rejected(&backend.storage).await;
+                }
+            }
+        };
+    }
+
+    storage_contract_tests!(tokio_fs_storage_contract, tokio_fs_storage);
+    storage_contract_tests!(memory_storage_contract, memory_storage);
+
+    #[tokio::test]
+    async fn memory_storage_uses_logical_absolute_paths() {
+        let storage = MemoryStorage::new();
+
+        storage
+            .put_object(Path::new("data.txt"), b"hello")
+            .await
+            .unwrap();
+
+        let data = storage.get_object(Path::new("/data.txt")).await.unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    #[tokio::test]
+    async fn memory_storage_rejects_traversal_on_writes() {
+        let storage = MemoryStorage::new();
+
+        let result = storage
+            .put_object(Path::new("../../../outside.txt"), b"nope")
+            .await;
+
+        assert!(matches!(result, Err(FenrisError::FileOperationError(_))));
+        assert!(!storage.exists(Path::new("outside.txt")).await);
     }
 }
