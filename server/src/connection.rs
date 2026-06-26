@@ -1,4 +1,6 @@
-use common::{DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Result};
+use common::{
+    DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput, Result, StorageBackend,
+};
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -10,20 +12,20 @@ use tracing::{debug, info};
 use crate::config::ServerConfig;
 use crate::request_handler::RequestHandler;
 
-pub struct Connection {
+pub struct Connection<B: StorageBackend> {
     id: u64,
     channel: DefaultSecureChannel,
     current_dir: PathBuf,
-    handler: Arc<RequestHandler>,
+    handler: Arc<RequestHandler<B>>,
     config: Arc<ServerConfig>,
 }
 
-impl Connection {
+impl<B: StorageBackend> Connection<B> {
     pub async fn accept(
         id: u64,
         stream: TcpStream,
         addr: SocketAddr,
-        handler: Arc<RequestHandler>,
+        handler: Arc<RequestHandler<B>>,
         config: Arc<ServerConfig>,
     ) -> Result<Self> {
         let handshake = DefaultSecureChannel::server_handshake(stream);

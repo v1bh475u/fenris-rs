@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use common::{DefaultFileOperations, FileOperations};
+use common::TokioFsStorage;
 use server::{Server, ServerConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,8 +37,7 @@ async fn main() -> Result<()> {
         .with_env_filter(args.log_level.clone())
         .init();
 
-    let file_ops: Arc<dyn FileOperations> =
-        Arc::new(DefaultFileOperations::new(args.base_dir.clone()));
+    let storage = Arc::new(TokioFsStorage::new(args.base_dir.clone()));
 
     let config = ServerConfig::builder()
         .max_connections(args.max_connections)
@@ -51,7 +50,7 @@ async fn main() -> Result<()> {
         .build();
 
     let bind_addr = format!("{}:{}", "localhost", args.port);
-    let (server, handle) = Server::bind(&bind_addr, file_ops, config).await?;
+    let (server, handle) = Server::bind(&bind_addr, storage, config).await?;
 
     println!("Fenris Server v{}", env!("CARGO_PKG_VERSION"));
     println!("Listening on {}", server.local_addr()?);
