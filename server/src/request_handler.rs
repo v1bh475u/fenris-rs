@@ -234,141 +234,10 @@ impl<B: StorageBackend> RequestHandler<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::FenrisMetadata;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Mutex;
+    use common::MemoryStorage;
 
-    #[derive(Default)]
-    struct MockStorage {
-        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
-        dirs: Mutex<HashSet<PathBuf>>,
-    }
-
-    impl MockStorage {
-        fn new() -> Self {
-            let mut dirs = HashSet::new();
-            dirs.insert(PathBuf::from("/"));
-            Self {
-                files: Mutex::new(HashMap::new()),
-                dirs: Mutex::new(dirs),
-            }
-        }
-
-        fn metadata_for(path: &Path, size: u64, is_namespace: bool) -> FenrisMetadata {
-            FenrisMetadata {
-                name: path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-                size,
-                is_namespace,
-                modified_time: 0,
-                permissions: if is_namespace { 0o755 } else { 0o644 },
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl StorageBackend for MockStorage {
-        async fn put_object(&self, path: &Path, data: &[u8]) -> Result<()> {
-            self.files
-                .lock()
-                .unwrap()
-                .insert(path.to_path_buf(), data.to_vec());
-            Ok(())
-        }
-
-        async fn get_object(&self, path: &Path) -> Result<Vec<u8>> {
-            let files = self.files.lock().unwrap();
-            files
-                .get(path)
-                .cloned()
-                .ok_or_else(|| FenrisError::FileOperationError("File not found".into()))
-        }
-
-        async fn append_object(&self, path: &Path, data: &[u8]) -> Result<()> {
-            let mut files = self.files.lock().unwrap();
-            files
-                .entry(path.to_path_buf())
-                .or_default()
-                .extend_from_slice(data);
-            Ok(())
-        }
-
-        async fn delete_object(&self, path: &Path) -> Result<()> {
-            let mut files = self.files.lock().unwrap();
-            if files.remove(path).is_some() {
-                Ok(())
-            } else {
-                Err(FenrisError::FileOperationError("File not found".into()))
-            }
-        }
-
-        async fn metadata(&self, path: &Path) -> Result<FenrisMetadata> {
-            let files = self.files.lock().unwrap();
-            if let Some(data) = files.get(path) {
-                return Ok(Self::metadata_for(path, data.len() as u64, false));
-            }
-            drop(files);
-
-            let dirs = self.dirs.lock().unwrap();
-            if dirs.contains(path) {
-                return Ok(Self::metadata_for(path, 0, true));
-            }
-
-            Err(FenrisError::FileOperationError("NotFound".into()))
-        }
-
-        async fn create_namespace(&self, path: &Path) -> Result<()> {
-            self.dirs.lock().unwrap().insert(path.to_path_buf());
-            Ok(())
-        }
-
-        async fn list_namespace(&self, path: &Path) -> Result<Vec<FenrisMetadata>> {
-            let mut entries = Vec::new();
-            let dirs = self.dirs.lock().unwrap();
-            for dir in dirs.iter() {
-                if dir.parent() == Some(path) {
-                    entries.push(Self::metadata_for(dir, 0, true));
-                }
-            }
-            drop(dirs);
-
-            let files = self.files.lock().unwrap();
-            for (file, data) in files.iter() {
-                if file.parent() == Some(path) {
-                    entries.push(Self::metadata_for(file, data.len() as u64, false));
-                }
-            }
-
-            Ok(entries)
-        }
-
-        async fn delete_namespace(&self, path: &Path) -> Result<()> {
-            if self.dirs.lock().unwrap().remove(path) {
-                Ok(())
-            } else {
-                Err(FenrisError::FileOperationError("Dir not found".into()))
-            }
-        }
-
-        async fn exists(&self, path: &Path) -> bool {
-            self.files.lock().unwrap().contains_key(path)
-                || self.dirs.lock().unwrap().contains(path)
-        }
-
-        async fn is_namespace(&self, path: &Path) -> bool {
-            self.dirs.lock().unwrap().contains(path)
-        }
-
-        async fn is_object(&self, path: &Path) -> bool {
-            self.files.lock().unwrap().contains_key(path)
-        }
-    }
-
-    fn create_handler() -> (RequestHandler<MockStorage>, Arc<MockStorage>) {
-        let storage = Arc::new(MockStorage::new());
+    fn create_handler() -> (RequestHandler<MemoryStorage>, Arc<MemoryStorage>) {
+        let storage = Arc::new(MemoryStorage::new());
         let handler = RequestHandler::new(storage.clone());
         (handler, storage)
     }
@@ -403,8 +272,7 @@ mod tests {
 
         assert!(matches!(output, FenrisOutput::Success { .. }));
 
-        let files = ops.files.lock().unwrap();
-        assert!(files.contains_key(&PathBuf::from("/home/test.txt")));
+        assert!(ops.exists(Path::new("/home/test.txt")).await);
     }
 
     #[tokio::test]
