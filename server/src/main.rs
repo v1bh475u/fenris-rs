@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use common::TokioFsStorage;
+use common::{ServerIdentityKey, TokioFsStorage};
 use server::{Server, ServerConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +15,9 @@ struct Args {
 
     #[arg(long, short = 'd', default_value = "/tmp")]
     base_dir: PathBuf,
+
+    #[arg(long)]
+    identity_key: PathBuf,
 
     #[arg(long, default_value = "1024")]
     max_connections: usize,
@@ -38,6 +41,7 @@ async fn main() -> Result<()> {
         .init();
 
     let storage = Arc::new(TokioFsStorage::new(args.base_dir.clone()));
+    let identity_key = Arc::new(load_or_create_server_identity(&args.identity_key)?);
 
     let config = ServerConfig::builder()
         .max_connections(args.max_connections)
@@ -50,11 +54,13 @@ async fn main() -> Result<()> {
         .build();
 
     let bind_addr = format!("{}:{}", "localhost", args.port);
-    let (server, handle) = Server::bind(&bind_addr, storage, config).await?;
+    let (server, handle) =
+        Server::bind_authenticated(&bind_addr, storage, identity_key.clone(), config).await?;
 
     println!("Fenris Server v{}", env!("CARGO_PKG_VERSION"));
     println!("Listening on {}", server.local_addr()?);
     println!("Base directory: {:?}", args.base_dir.canonicalize()?);
+    println!("Server identity: {}", identity_key.public_key().to_hex());
     println!("Max connections: {}", args.max_connections);
     println!("Press Ctrl+C to stop");
 
@@ -67,4 +73,40 @@ async fn main() -> Result<()> {
 
     server.run().await?;
     Ok(())
+}
+
+fn load_or_create_server_identity(path: &Path) -> Result<ServerIdentityKey> {
+    ServerIdentityKey::load_or_generate(path).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_or_create_server_identity_creates_missing_key_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let key_path = temp_dir.path().join("server.key");
+
+        let key = load_or_create_server_identity(&key_path).unwrap();
+
+        assert!(key_path.exists());
+        assert_eq!(
+            ServerIdentityKey::load_from_file(&key_path)
+                .unwrap()
+                .to_bytes(),
+            key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn load_or_create_server_identity_reuses_existing_key_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let key_path = temp_dir.path().join("server.key");
+
+        let first = load_or_create_server_identity(&key_path).unwrap();
+        let second = load_or_create_server_identity(&key_path).unwrap();
+
+        assert_eq!(second.to_bytes(), first.to_bytes());
+    }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use common::ServerIdentityPublicKey;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
@@ -18,6 +19,17 @@ impl Client {
         Self {
             app: App::new(),
             connection_manager: ConnectionManager::default(),
+        }
+    }
+
+    pub fn with_server_identity(server_identity: ServerIdentityPublicKey) -> Self {
+        Self {
+            app: App::new(),
+            connection_manager: ConnectionManager::with_server_identity(
+                crate::request_manager::RequestManager,
+                crate::response_manager::ResponseManager,
+                server_identity,
+            ),
         }
     }
 

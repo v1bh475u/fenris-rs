@@ -1,6 +1,6 @@
 use common::{
     DEFAULT_TRANSFER_CHUNK_SIZE, DefaultSecureChannel, FenrisCommand, FenrisError, FenrisOutput,
-    Result, StorageBackend,
+    Result, ServerIdentityKey, StorageBackend,
 };
 use std::io;
 use std::net::SocketAddr;
@@ -30,7 +30,35 @@ impl<B: StorageBackend> Connection<B> {
         handler: Arc<RequestHandler<B>>,
         config: Arc<ServerConfig>,
     ) -> Result<Self> {
-        let handshake = DefaultSecureChannel::server_handshake(stream);
+        Self::accept_with_identity(id, stream, addr, handler, config, None).await
+    }
+
+    pub async fn accept_authenticated(
+        id: u64,
+        stream: TcpStream,
+        addr: SocketAddr,
+        handler: Arc<RequestHandler<B>>,
+        config: Arc<ServerConfig>,
+        identity_key: Arc<ServerIdentityKey>,
+    ) -> Result<Self> {
+        Self::accept_with_identity(id, stream, addr, handler, config, Some(identity_key)).await
+    }
+
+    async fn accept_with_identity(
+        id: u64,
+        stream: TcpStream,
+        addr: SocketAddr,
+        handler: Arc<RequestHandler<B>>,
+        config: Arc<ServerConfig>,
+        identity_key: Option<Arc<ServerIdentityKey>>,
+    ) -> Result<Self> {
+        let handshake = async {
+            if let Some(identity_key) = identity_key.as_deref() {
+                DefaultSecureChannel::server_handshake_authenticated(stream, identity_key).await
+            } else {
+                DefaultSecureChannel::server_handshake(stream).await
+            }
+        };
 
         let channel = tokio::time::timeout(config.handshake_timeout, handshake)
             .await

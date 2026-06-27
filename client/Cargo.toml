@@ -28,3 +28,6 @@ prost = { workspace = true }
 bytes = { workspace = true }
 
 chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3.8"
