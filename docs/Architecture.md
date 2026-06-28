@@ -5,7 +5,7 @@
 **Fenris** (Fast Encrypted Networked Robust Information Storage) is a secure, asynchronous, client-server file transfer system implemented in Rust. It emphasizes security, performance, and modularity, utilizing modern Rust practices and the Tokio async runtime.
 
 The system consists of three main crates:
-*   `client`: A TUI-based terminal client for interacting with the server.
+*   `client`: A terminal client with TUI and batch frontends for interacting with the server.
 *   `server`: A concurrent, asynchronous server that handles file operations.
 *   `common`: Shared libraries for protocols, cryptography, compression, and file abstractions.
 
@@ -43,17 +43,20 @@ File system interaction is abstracted through the `FileOperations` trait.
 
 ## 3. Client Architecture
 
-The client is a TUI (Terminal User Interface) application built with `ratatui` and `tokio`.
+The client provides two frontends over the same command execution path:
+*   TUI mode, built with `ratatui` and `tokio`, for interactive terminal use.
+*   Batch mode, for executing newline-delimited commands from a file or stdin.
 
 ### 3.1 Component Structure
 
-*   **Client (`client.rs`)**: The entry point and main event loop. It coordinates between user input (keyboard events) and network activity.
+*   **TuiClient (`client.rs`)**: The interactive event loop. It coordinates between keyboard input, UI state, and network activity.
+*   **Batch runner (`batch.rs`)**: Reads a batch command source, executes commands serially, and writes human-readable or JSON Lines output.
 *   **App (`app.rs`)**: A state container for the UI. It holds the current screen, input buffers, command history, and message logs. It is strictly for *presentation state*.
 *   **ConnectionManager (`connection_manager.rs`)**: Manages the `SecureChannel` lifecycle.
     *   Maintains the active connection state.
     *   Coordinates the **RequestManager** and **ResponseManager**.
-*   **RequestManager (`request_manager.rs`)**: Parses user text input (e.g., `ls /tmp`) and constructs the appropriate Protobuf `Request` object.
-*   **ResponseManager (`response_manager.rs`)**: Interprets the raw Protobuf `Response` from the server and formats it into user-friendly text or structured data for the `App` to display.
+*   **RequestManager (`request_manager.rs`)**: Parses user text input (e.g., `ls /tmp`) and constructs the appropriate Fenris command.
+*   **ResponseManager (`response_manager.rs`)**: Interprets Fenris output from the server and formats it into user-friendly text for either frontend.
 
 ### 3.2 UI Layer (`ui/`)
 *   **Screens**:

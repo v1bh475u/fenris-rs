@@ -9,12 +9,12 @@ use crate::{
     ui,
 };
 
-pub struct Client {
+pub struct TuiClient {
     app: App,
     connection_manager: ConnectionManager,
 }
 
-impl Client {
+impl TuiClient {
     pub fn new() -> Self {
         Self {
             app: App::new(),
@@ -177,7 +177,7 @@ impl Client {
     }
 }
 
-impl Default for Client {
+impl Default for TuiClient {
     fn default() -> Self {
         Self::new()
     }
