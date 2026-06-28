@@ -1,0 +1,13 @@
+[package]
+name = "benchmarks"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+common = { path = "../common" }
+tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3.8"
