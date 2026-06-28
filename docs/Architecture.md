@@ -28,6 +28,10 @@ The `SecureChannel` struct wraps a raw `TcpStream` to provide a secure transport
     *   **Sending**: Serialize $\to$ Compress $\to$ Encrypt (Seal) $\to$ Frame $\to$ Send.
     *   **Receiving**: Receive Frame $\to$ Decrypt (Open) $\to$ Decompress $\to$ Deserialize.
 
+Compression is statically selectable through the shared `Compressor` trait. The
+default stack uses no compression, with zlib always available and zstd available
+behind the `common/zstd` Cargo feature.
+
 ### 2.3 Cryptography (`crypto`)
 The system uses a trait-based approach to allow algorithm agility. Defaults (`DefaultCrypto`) are:
 *   **Encryption**: **AES-256-GCM** (Authenticated Encryption).
