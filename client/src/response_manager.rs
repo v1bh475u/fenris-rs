@@ -1,6 +1,7 @@
 use common::{FenrisMetadata, FenrisOutput};
 use tracing::debug;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormattedResponse {
     pub success: bool,
     pub message: String,
