@@ -3,6 +3,7 @@ members = [
     "common",
     "client", 
     "server",
+    "benchmarks",
 ]
 resolver = "2"
 
