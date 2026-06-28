@@ -7,7 +7,7 @@ mod ui;
 
 use anyhow::Result;
 use clap::Parser;
-use client::Client;
+use client::TuiClient;
 use common::ServerIdentityPublicKey;
 
 #[derive(Parser, Debug)]
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
 
     let mut terminal = ui::terminal::init()?;
 
-    let mut client = Client::with_server_identity(server_identity);
+    let mut client = TuiClient::with_server_identity(server_identity);
     let result = client.run(&mut terminal).await;
 
     ui::terminal::restore()?;
