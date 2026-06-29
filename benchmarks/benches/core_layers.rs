@@ -1,7 +1,9 @@
 use benchmarks::{
-    CHUNK_PAYLOAD_SIZE, LARGE_TRANSFER_SIZE, SMALL_PAYLOAD_SIZE, compressible_payload,
-    deterministic_payload, read_all_chunks, sample_content_output, sample_write_command,
-    seeded_memory_storage,
+    CHUNK_PAYLOAD_SIZE, CONCURRENT_OBJECT_COUNT, CONCURRENT_OBJECT_SIZE, LARGE_STORAGE_OBJECT_SIZE,
+    LARGE_TRANSFER_SIZE, MANY_SMALL_OBJECT_COUNT, SMALL_PAYLOAD_SIZE, compressible_payload,
+    concurrent_object_paths, deterministic_payload, many_small_object_paths,
+    put_concurrent_objects, read_all_chunks, read_concurrent_objects, read_objects,
+    sample_content_output, sample_write_command, seed_many_small_objects, seeded_memory_storage,
 };
 use common::{
     CompressionManager, CryptoManager, DEFAULT_TRANSFER_CHUNK_SIZE, FenrisCommand, FenrisOutput,
@@ -209,12 +211,118 @@ fn bench_storage(c: &mut Criterion) {
         })
     });
 
+    let large_payload = deterministic_payload(LARGE_STORAGE_OBJECT_SIZE);
+
+    group.throughput(Throughput::Bytes(LARGE_STORAGE_OBJECT_SIZE as u64));
+    group.bench_function("memory_put_16_mib", |b| {
+        b.to_async(&runtime).iter_batched(
+            || (MemoryStorage::new(), large_payload.clone()),
+            |(storage, payload)| async move {
+                storage
+                    .put_object(Path::new("/bench-large.bin"), &payload)
+                    .await
+                    .unwrap();
+            },
+            BatchSize::LargeInput,
+        )
+    });
+
+    let large_memory_storage = runtime
+        .block_on(seeded_memory_storage(LARGE_STORAGE_OBJECT_SIZE))
+        .unwrap();
+    group.bench_function("memory_chunked_read_16_mib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = large_memory_storage.clone();
+            async move {
+                let total = read_all_chunks(
+                    &storage,
+                    Path::new("/bench.bin"),
+                    DEFAULT_TRANSFER_CHUNK_SIZE,
+                )
+                .await
+                .unwrap();
+                black_box(total);
+            }
+        })
+    });
+
+    group.throughput(Throughput::Bytes(
+        (MANY_SMALL_OBJECT_COUNT * SMALL_PAYLOAD_SIZE) as u64,
+    ));
+    group.bench_function("memory_many_small_put_256x4_kib", |b| {
+        b.to_async(&runtime).iter_batched(
+            MemoryStorage::new,
+            |storage| async move {
+                black_box(seed_many_small_objects(&storage).await.unwrap());
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let many_small_memory_storage = MemoryStorage::new();
+    runtime
+        .block_on(seed_many_small_objects(&many_small_memory_storage))
+        .unwrap();
+    let many_small_paths = many_small_object_paths();
+    group.bench_function("memory_many_small_read_256x4_kib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = many_small_memory_storage.clone();
+            let paths = many_small_paths.clone();
+            async move {
+                black_box(read_objects(&storage, &paths).await.unwrap());
+            }
+        })
+    });
+
+    group.throughput(Throughput::Bytes(
+        (CONCURRENT_OBJECT_COUNT * CONCURRENT_OBJECT_SIZE) as u64,
+    ));
+    group.bench_function("memory_concurrent_put_8x1_mib", |b| {
+        b.to_async(&runtime).iter_batched(
+            MemoryStorage::new,
+            |storage| async move {
+                black_box(
+                    put_concurrent_objects(
+                        storage,
+                        CONCURRENT_OBJECT_COUNT,
+                        CONCURRENT_OBJECT_SIZE,
+                    )
+                    .await
+                    .unwrap(),
+                );
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let concurrent_memory_storage = MemoryStorage::new();
+    runtime
+        .block_on(put_concurrent_objects(
+            concurrent_memory_storage.clone(),
+            CONCURRENT_OBJECT_COUNT,
+            CONCURRENT_OBJECT_SIZE,
+        ))
+        .unwrap();
+    group.bench_function("memory_concurrent_read_8x1_mib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = concurrent_memory_storage.clone();
+            async move {
+                black_box(
+                    read_concurrent_objects(storage, concurrent_object_paths())
+                        .await
+                        .unwrap(),
+                );
+            }
+        })
+    });
+
     let temp_dir = tempfile::tempdir().unwrap();
     let fs_storage = TokioFsStorage::new(temp_dir.path().to_path_buf());
     runtime
         .block_on(fs_storage.put_object(Path::new("bench.bin"), &payload))
         .unwrap();
 
+    group.throughput(Throughput::Bytes(LARGE_TRANSFER_SIZE as u64));
     group.bench_function("tokio_fs_put_1_mib", |b| {
         b.to_async(&runtime).iter_batched(
             || payload.clone(),
@@ -243,6 +351,128 @@ fn bench_storage(c: &mut Criterion) {
                 .await
                 .unwrap();
                 black_box(total);
+            }
+        })
+    });
+
+    group.throughput(Throughput::Bytes(LARGE_STORAGE_OBJECT_SIZE as u64));
+    group.bench_function("tokio_fs_put_16_mib", |b| {
+        b.to_async(&runtime).iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let storage = TokioFsStorage::new(temp_dir.path().to_path_buf());
+                (temp_dir, storage, large_payload.clone())
+            },
+            |(temp_dir, storage, payload)| async move {
+                let _temp_dir = temp_dir;
+                storage
+                    .put_object(Path::new("bench-large-write.bin"), &payload)
+                    .await
+                    .unwrap();
+            },
+            BatchSize::LargeInput,
+        )
+    });
+
+    let large_temp_dir = tempfile::tempdir().unwrap();
+    let large_fs_storage = TokioFsStorage::new(large_temp_dir.path().to_path_buf());
+    runtime
+        .block_on(large_fs_storage.put_object(Path::new("bench-large.bin"), &large_payload))
+        .unwrap();
+    group.bench_function("tokio_fs_chunked_read_16_mib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = large_fs_storage.clone();
+            async move {
+                let total = read_all_chunks(
+                    &storage,
+                    Path::new("bench-large.bin"),
+                    DEFAULT_TRANSFER_CHUNK_SIZE,
+                )
+                .await
+                .unwrap();
+                black_box(total);
+            }
+        })
+    });
+
+    group.throughput(Throughput::Bytes(
+        (MANY_SMALL_OBJECT_COUNT * SMALL_PAYLOAD_SIZE) as u64,
+    ));
+    group.bench_function("tokio_fs_many_small_put_256x4_kib", |b| {
+        b.to_async(&runtime).iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let storage = TokioFsStorage::new(temp_dir.path().to_path_buf());
+                (temp_dir, storage)
+            },
+            |(temp_dir, storage)| async move {
+                let _temp_dir = temp_dir;
+                black_box(seed_many_small_objects(&storage).await.unwrap());
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let many_small_temp_dir = tempfile::tempdir().unwrap();
+    let many_small_fs_storage = TokioFsStorage::new(many_small_temp_dir.path().to_path_buf());
+    runtime
+        .block_on(seed_many_small_objects(&many_small_fs_storage))
+        .unwrap();
+    let many_small_paths = many_small_object_paths();
+    group.bench_function("tokio_fs_many_small_read_256x4_kib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = many_small_fs_storage.clone();
+            let paths = many_small_paths.clone();
+            async move {
+                black_box(read_objects(&storage, &paths).await.unwrap());
+            }
+        })
+    });
+
+    group.throughput(Throughput::Bytes(
+        (CONCURRENT_OBJECT_COUNT * CONCURRENT_OBJECT_SIZE) as u64,
+    ));
+    group.bench_function("tokio_fs_concurrent_put_8x1_mib", |b| {
+        b.to_async(&runtime).iter_batched(
+            || {
+                let temp_dir = tempfile::tempdir().unwrap();
+                let storage = TokioFsStorage::new(temp_dir.path().to_path_buf());
+                (temp_dir, storage)
+            },
+            |(temp_dir, storage)| async move {
+                let _temp_dir = temp_dir;
+                black_box(
+                    put_concurrent_objects(
+                        storage,
+                        CONCURRENT_OBJECT_COUNT,
+                        CONCURRENT_OBJECT_SIZE,
+                    )
+                    .await
+                    .unwrap(),
+                );
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let concurrent_temp_dir = tempfile::tempdir().unwrap();
+    let concurrent_fs_storage = TokioFsStorage::new(concurrent_temp_dir.path().to_path_buf());
+    runtime
+        .block_on(put_concurrent_objects(
+            concurrent_fs_storage.clone(),
+            CONCURRENT_OBJECT_COUNT,
+            CONCURRENT_OBJECT_SIZE,
+        ))
+        .unwrap();
+    group.bench_function("tokio_fs_concurrent_read_8x1_mib", |b| {
+        b.to_async(&runtime).iter(|| {
+            let storage = concurrent_fs_storage.clone();
+            async move {
+                black_box(
+                    read_concurrent_objects(storage, concurrent_object_paths())
+                        .await
+                        .unwrap(),
+                );
             }
         })
     });
