@@ -1,3 +1,5 @@
+#[cfg(feature = "zstd")]
+use crate::compression::ZstdCompressor;
 use crate::{
     CompressionManager, CryptoManager, ProtobufCodec, ZlibCompressor,
     compression::{Compressor, NullCompressor},
@@ -98,6 +100,30 @@ impl<const LEVEL: u32> CompressionConfig for ZlibWithLevel<LEVEL> {
     }
 }
 
+#[cfg(feature = "zstd")]
+pub struct Zstd;
+
+#[cfg(feature = "zstd")]
+impl CompressionConfig for Zstd {
+    type Compressor = ZstdCompressor;
+
+    fn compression() -> CompressionManager<Self::Compressor> {
+        CompressionManager::new(ZstdCompressor::default())
+    }
+}
+
+#[cfg(feature = "zstd")]
+pub struct ZstdWithLevel<const LEVEL: i32>;
+
+#[cfg(feature = "zstd")]
+impl<const LEVEL: i32> CompressionConfig for ZstdWithLevel<LEVEL> {
+    type Compressor = ZstdCompressor;
+
+    fn compression() -> CompressionManager<Self::Compressor> {
+        CompressionManager::new(ZstdCompressor::with_level(LEVEL))
+    }
+}
+
 pub struct Protobuf;
 
 impl ProtocolConfig for Protobuf {
@@ -154,6 +180,30 @@ mod tests {
         let data = b"zlib configured compression ".repeat(32);
 
         assert_eq!(compression.compressor_name(), "zlib");
+
+        let compressed = compression.compress(&data).unwrap();
+        assert_eq!(compressed, expected.compress(&data).unwrap());
+        assert_eq!(compression.decompress(&compressed).unwrap(), data);
+    }
+
+    #[cfg(feature = "zstd")]
+    #[test]
+    fn zstd_compression_uses_zstd_default_settings() {
+        let compression: CompressionManager<ZstdCompressor> = Zstd::compression();
+        let data = b"zstd configured compression ".repeat(32);
+
+        assert_eq!(compression.compressor_name(), "zstd");
+
+        let compressed = compression.compress(&data).unwrap();
+        assert_eq!(compression.decompress(&compressed).unwrap(), data);
+    }
+
+    #[cfg(feature = "zstd")]
+    #[test]
+    fn zstd_compression_uses_configured_level() {
+        let compression: CompressionManager<ZstdCompressor> = ZstdWithLevel::<9>::compression();
+        let expected = CompressionManager::new(ZstdCompressor::with_level(9));
+        let data = b"zstd configured level ".repeat(64);
 
         let compressed = compression.compress(&data).unwrap();
         assert_eq!(compressed, expected.compress(&data).unwrap());

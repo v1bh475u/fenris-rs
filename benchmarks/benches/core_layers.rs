@@ -6,7 +6,7 @@ use benchmarks::{
 use common::{
     CompressionManager, CryptoManager, DEFAULT_TRANSFER_CHUNK_SIZE, FenrisCommand, FenrisOutput,
     FrameLimits, IV_SIZE, KEY_SIZE, LengthPrefixedFrame, MemoryStorage, ProtobufCodec,
-    ProtocolCodec, StorageBackend, TokioFsStorage, TransferChunk, ZlibCompressor,
+    ProtocolCodec, StorageBackend, TokioFsStorage, TransferChunk, ZlibCompressor, ZstdCompressor,
     compression::NullCompressor,
     crypto::{AesGcmEncryptor, HkdfSha256Deriver, X25519KeyExchanger},
 };
@@ -90,8 +90,10 @@ fn bench_compression(c: &mut Criterion) {
         let payload = compressible_payload(size);
         let null = CompressionManager::new(NullCompressor);
         let zlib = CompressionManager::new(ZlibCompressor::default());
+        let zstd = CompressionManager::new(ZstdCompressor::default());
         let null_compressed = null.compress(&payload).unwrap();
         let zlib_compressed = zlib.compress(&payload).unwrap();
+        let zstd_compressed = zstd.compress(&payload).unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("null_compress", size),
@@ -115,6 +117,18 @@ fn bench_compression(c: &mut Criterion) {
             BenchmarkId::new("zlib_decompress", size),
             &zlib_compressed,
             |b, compressed| b.iter(|| black_box(zlib.decompress(black_box(compressed)).unwrap())),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zstd_compress", size),
+            &payload,
+            |b, payload| b.iter(|| black_box(zstd.compress(black_box(payload)).unwrap())),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zstd_decompress", size),
+            &zstd_compressed,
+            |b, compressed| b.iter(|| black_box(zstd.decompress(black_box(compressed)).unwrap())),
         );
     }
 

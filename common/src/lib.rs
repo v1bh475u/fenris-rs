@@ -12,11 +12,15 @@ pub mod protocol;
 pub mod secure_channel;
 pub mod storage;
 
+#[cfg(feature = "zstd")]
+pub use compression::ZstdCompressor;
 pub use compression::{CompressionManager, ZlibCompressor};
 pub use config::{
     CompressionConfig, CompressionOf, Config, CryptoConfig, CryptoOf, DefaultSuite, Protobuf,
     ProtocolCodecOf, ProtocolConfig, SecureChannelConfig, Zlib, ZlibWithLevel,
 };
+#[cfg(feature = "zstd")]
+pub use config::{Zstd, ZstdWithLevel};
 pub use crypto::{CryptoManager, IV_SIZE, KEY_SIZE, TAG_SIZE};
 pub use domain::{
     DEFAULT_TRANSFER_CHUNK_SIZE, FenrisCommand, FenrisMetadata, FenrisOutput, ObjectWriteMode,
